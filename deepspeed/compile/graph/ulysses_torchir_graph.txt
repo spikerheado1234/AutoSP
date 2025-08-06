@@ -1,0 +1,435 @@
+class GraphModule(torch.nn.Module):
+    def forward(self, L_attention_mask_: "i64[1, 2048]", L_cache_position_: "i64[2048]"):
+        l_attention_mask_ = L_attention_mask_
+        l_cache_position_ = L_cache_position_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1980 in _prepare_4d_causal_attention_mask_with_cache_position, code: causal_mask = torch.full(
+        causal_mask: "bf16[2048, 2048]" = torch.full((2048, 2048), fill_value = -3.3895313892515355e+38, dtype = torch.bfloat16, device = device(type='cuda', index=0))
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1984 in _prepare_4d_causal_attention_mask_with_cache_position, code: causal_mask = torch.triu(causal_mask, diagonal=1)
+        causal_mask_1: "bf16[2048, 2048]" = torch.triu(causal_mask, diagonal = 1);  causal_mask = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1985 in _prepare_4d_causal_attention_mask_with_cache_position, code: causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+        arange: "i64[2048]" = torch.arange(2048, device = device(type='cuda', index=0))
+        reshape: "i64[2048, 1]" = l_cache_position_.reshape(-1, 1);  l_cache_position_ = None
+        gt: "b8[2048, 2048]" = arange > reshape;  arange = reshape = None
+        causal_mask_1 *= gt;  causal_mask_2: "bf16[2048, 2048]" = causal_mask_1;  causal_mask_1 = gt = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1986 in _prepare_4d_causal_attention_mask_with_cache_position, code: causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+        getitem: "bf16[1, 1, 2048, 2048]" = causal_mask_2[(None, None, slice(None, None, None), slice(None, None, None))];  causal_mask_2 = None
+        causal_mask_3: "bf16[1, 1, 2048, 2048]" = getitem.expand(1, 1, -1, -1);  getitem = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1988 in _prepare_4d_causal_attention_mask_with_cache_position, code: causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+        causal_mask_4: "bf16[1, 1, 2048, 2048]" = causal_mask_3.clone();  causal_mask_3 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1990 in _prepare_4d_causal_attention_mask_with_cache_position, code: padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
+        getitem_1: "bf16[1, 1, 2048, 2048]" = causal_mask_4[(slice(None, None, None), slice(None, None, None), slice(None, None, None), slice(None, 2048, None))]
+        getitem_2: "i64[1, 1, 1, 2048]" = l_attention_mask_[(slice(None, None, None), None, None, slice(None, None, None))];  l_attention_mask_ = None
+        to: "i64[1, 1, 1, 2048]" = getitem_2.to(device(type='cuda', index=0));  getitem_2 = None
+        padding_mask: "bf16[1, 1, 2048, 2048]" = getitem_1 + to;  getitem_1 = to = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1993 in _prepare_4d_causal_attention_mask_with_cache_position, code: padding_mask = padding_mask == 0
+        padding_mask_1: "b8[1, 1, 2048, 2048]" = padding_mask == 0;  padding_mask = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1994 in _prepare_4d_causal_attention_mask_with_cache_position, code: causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
+        getitem_3: "bf16[1, 1, 2048, 2048]" = causal_mask_4[(slice(None, None, None), slice(None, None, None), slice(None, None, None), slice(None, 2048, None))]
+        masked_fill: "bf16[1, 1, 2048, 2048]" = getitem_3.masked_fill(padding_mask_1, -3.3895313892515355e+38);  getitem_3 = padding_mask_1 = None
+        causal_mask_4[(slice(None, None, None), slice(None, None, None), slice(None, None, None), slice(None, 2048, None))] = masked_fill;  setitem = causal_mask_4;  masked_fill = setitem = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/modeling_attn_mask_utils.py:241 in _unmask_unattended, code: return expanded_mask.mul(~torch.all(expanded_mask == min_dtype, dim=-1, keepdim=True))
+        eq_1: "b8[1, 1, 2048, 2048]" = causal_mask_4 == -3.3895313892515355e+38
+        all_1: "b8[1, 1, 2048, 1]" = torch.all(eq_1, dim = -1, keepdim = True);  eq_1 = None
+        invert: "b8[1, 1, 2048, 1]" = ~all_1;  all_1 = None
+        causal_mask_5: "bf16[1, 1, 2048, 2048]" = causal_mask_4.mul(invert);  causal_mask_4 = invert = None
+        return (causal_mask_5,)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_self_buffers_inv_freq_: "bf16[64]", L_position_ids_: "i64[1, 2048]"):
+        l_self_buffers_inv_freq_ = L_self_buffers_inv_freq_
+        l_position_ids_ = L_position_ids_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1311 in forward, code: inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        getitem: "bf16[1, 64, 1]" = l_self_buffers_inv_freq_[(None, slice(None, None, None), None)];  l_self_buffers_inv_freq_ = None
+        float_1: "f32[1, 64, 1]" = getitem.float();  getitem = None
+        inv_freq_expanded: "f32[1, 64, 1]" = float_1.expand(1, -1, 1);  float_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1312 in forward, code: position_ids_expanded = position_ids[:, None, :].float()
+        getitem_1: "i64[1, 1, 2048]" = l_position_ids_[(slice(None, None, None), None, slice(None, None, None))];  l_position_ids_ = None
+        position_ids_expanded: "f32[1, 1, 2048]" = getitem_1.float();  getitem_1 = None
+        
+        # No stacktrace found for following nodes
+        _enter_autocast = torch.amp.autocast_mode._enter_autocast('cuda', None, False, None)
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1317 in forward, code: freqs = (inv_freq_expanded.float().to(x.device) @ position_ids_expanded.float()).transpose(1, 2)
+        float_3: "f32[1, 64, 1]" = inv_freq_expanded.float();  inv_freq_expanded = None
+        to: "f32[1, 64, 1]" = float_3.to(device(type='cuda', index=0));  float_3 = None
+        float_4: "f32[1, 1, 2048]" = position_ids_expanded.float();  position_ids_expanded = None
+        matmul: "f32[1, 64, 2048]" = to @ float_4;  to = float_4 = None
+        freqs: "f32[1, 2048, 64]" = matmul.transpose(1, 2);  matmul = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1318 in forward, code: emb = torch.cat((freqs, freqs), dim=-1)
+        emb: "f32[1, 2048, 128]" = torch.cat((freqs, freqs), dim = -1);  freqs = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1319 in forward, code: cos = emb.cos()
+        cos: "f32[1, 2048, 128]" = emb.cos()
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1320 in forward, code: sin = emb.sin()
+        sin: "f32[1, 2048, 128]" = emb.sin();  emb = None
+        
+        # No stacktrace found for following nodes
+        _exit_autocast = torch.amp.autocast_mode._exit_autocast(_enter_autocast);  _enter_autocast = _exit_autocast = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1323 in forward, code: cos = cos * self.attention_scaling
+        cos_1: "f32[1, 2048, 128]" = cos * 1.0;  cos = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1324 in forward, code: sin = sin * self.attention_scaling
+        sin_1: "f32[1, 2048, 128]" = sin * 1.0;  sin = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1326 in forward, code: return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        to_1: "bf16[1, 2048, 128]" = cos_1.to(dtype = torch.bfloat16);  cos_1 = None
+        to_2: "bf16[1, 2048, 128]" = sin_1.to(dtype = torch.bfloat16);  sin_1 = None
+        return (to_1, to_2)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_hidden_states_: "bf16[1, 2048, 4096]", L_position_embeddings_0_: "bf16[1, 2048, 128]", L_position_embeddings_1_: "bf16[1, 2048, 128]", L_self_modules_input_layernorm_parameters_weight_: "bf16[4096]"):
+        l_hidden_states_ = L_hidden_states_
+        l_position_embeddings_0_ = L_position_embeddings_0_
+        l_position_embeddings_1_ = L_position_embeddings_1_
+        l_self_modules_input_layernorm_parameters_weight_ = L_self_modules_input_layernorm_parameters_weight_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1555 in forward, code: hidden_states = hidden_states[:, start:end, :]
+        hidden_states: "bf16[1, 1024, 4096]" = l_hidden_states_[(slice(None, None, None), slice(0, 1024, None), slice(None, None, None))];  l_hidden_states_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1558 in <genexpr>, code: pe[:, start:end, :] if pe.shape[1] > seqs_per_rank else pe
+        cos: "bf16[1, 1024, 128]" = l_position_embeddings_0_[(slice(None, None, None), slice(0, 1024, None), slice(None, None, None))];  l_position_embeddings_0_ = None
+        sin: "bf16[1, 1024, 128]" = l_position_embeddings_1_[(slice(None, None, None), slice(0, 1024, None), slice(None, None, None))];  l_position_embeddings_1_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1256 in forward, code: hidden_states = hidden_states.to(torch.float32)
+        hidden_states_1: "f32[1, 1024, 4096]" = hidden_states.to(torch.float32)
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1257 in forward, code: variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        pow_1: "f32[1, 1024, 4096]" = hidden_states_1.pow(2)
+        variance: "f32[1, 1024, 1]" = pow_1.mean(-1, keepdim = True);  pow_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1258 in forward, code: hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        add: "f32[1, 1024, 1]" = variance + 1e-05;  variance = None
+        rsqrt: "f32[1, 1024, 1]" = torch.rsqrt(add);  add = None
+        hidden_states_2: "f32[1, 1024, 4096]" = hidden_states_1 * rsqrt;  hidden_states_1 = rsqrt = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1259 in forward, code: return self.weight * hidden_states.to(input_dtype)
+        to_1: "bf16[1, 1024, 4096]" = hidden_states_2.to(torch.bfloat16);  hidden_states_2 = None
+        hidden_states_3: "bf16[1, 1024, 4096]" = l_self_modules_input_layernorm_parameters_weight_ * to_1;  l_self_modules_input_layernorm_parameters_weight_ = to_1 = None
+        return (hidden_states_3, cos, sin, hidden_states)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_hidden_states_: "bf16[1, 1024, 4096]", L_self_modules_q_proj_parameters_weight_: "bf16[4096, 4096]", L_self_modules_k_proj_parameters_weight_: "bf16[4096, 4096]", L_self_modules_v_proj_parameters_weight_: "bf16[4096, 4096]", L_position_embeddings_0_: "bf16[1, 1024, 128]", L_position_embeddings_1_: "bf16[1, 1024, 128]"):
+        l_hidden_states_ = L_hidden_states_
+        l_self_modules_q_proj_parameters_weight_ = L_self_modules_q_proj_parameters_weight_
+        l_self_modules_k_proj_parameters_weight_ = L_self_modules_k_proj_parameters_weight_
+        l_self_modules_v_proj_parameters_weight_ = L_self_modules_v_proj_parameters_weight_
+        l_position_embeddings_0_ = L_position_embeddings_0_
+        l_position_embeddings_1_ = L_position_embeddings_1_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1496 in forward, code: query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        linear: "bf16[1, 1024, 4096]" = torch._C._nn.linear(l_hidden_states_, l_self_modules_q_proj_parameters_weight_, None);  l_self_modules_q_proj_parameters_weight_ = None
+        view: "bf16[1, 1024, 32, 128]" = linear.view((1, 1024, -1, 128));  linear = None
+        query_states: "bf16[1, 32, 1024, 128]" = view.transpose(1, 2);  view = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1497 in forward, code: key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        linear_1: "bf16[1, 1024, 4096]" = torch._C._nn.linear(l_hidden_states_, l_self_modules_k_proj_parameters_weight_, None);  l_self_modules_k_proj_parameters_weight_ = None
+        view_1: "bf16[1, 1024, 32, 128]" = linear_1.view((1, 1024, -1, 128));  linear_1 = None
+        key_states: "bf16[1, 32, 1024, 128]" = view_1.transpose(1, 2);  view_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1498 in forward, code: value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        linear_2: "bf16[1, 1024, 4096]" = torch._C._nn.linear(l_hidden_states_, l_self_modules_v_proj_parameters_weight_, None);  l_hidden_states_ = l_self_modules_v_proj_parameters_weight_ = None
+        view_2: "bf16[1, 1024, 32, 128]" = linear_2.view((1, 1024, -1, 128));  linear_2 = None
+        value_states: "bf16[1, 32, 1024, 128]" = view_2.transpose(1, 2);  view_2 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1356 in apply_rotary_pos_emb, code: cos = cos.unsqueeze(unsqueeze_dim)
+        cos: "bf16[1, 1, 1024, 128]" = l_position_embeddings_0_.unsqueeze(1);  l_position_embeddings_0_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1357 in apply_rotary_pos_emb, code: sin = sin.unsqueeze(unsqueeze_dim)
+        sin: "bf16[1, 1, 1024, 128]" = l_position_embeddings_1_.unsqueeze(1);  l_position_embeddings_1_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1358 in apply_rotary_pos_emb, code: q_embed = (q * cos) + (rotate_half(q) * sin)
+        mul: "bf16[1, 32, 1024, 128]" = query_states * cos
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1331 in rotate_half, code: x1 = x[..., : x.shape[-1] // 2]
+        x1: "bf16[1, 32, 1024, 64]" = query_states[(Ellipsis, slice(None, 64, None))]
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1332 in rotate_half, code: x2 = x[..., x.shape[-1] // 2 :]
+        x2: "bf16[1, 32, 1024, 64]" = query_states[(Ellipsis, slice(64, None, None))];  query_states = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1333 in rotate_half, code: return torch.cat((-x2, x1), dim=-1)
+        neg: "bf16[1, 32, 1024, 64]" = -x2;  x2 = None
+        cat: "bf16[1, 32, 1024, 128]" = torch.cat((neg, x1), dim = -1);  neg = x1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1358 in apply_rotary_pos_emb, code: q_embed = (q * cos) + (rotate_half(q) * sin)
+        mul_1: "bf16[1, 32, 1024, 128]" = cat * sin;  cat = None
+        q_embed: "bf16[1, 32, 1024, 128]" = mul + mul_1;  mul = mul_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1359 in apply_rotary_pos_emb, code: k_embed = (k * cos) + (rotate_half(k) * sin)
+        mul_2: "bf16[1, 32, 1024, 128]" = key_states * cos;  cos = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1331 in rotate_half, code: x1 = x[..., : x.shape[-1] // 2]
+        x1_1: "bf16[1, 32, 1024, 64]" = key_states[(Ellipsis, slice(None, 64, None))]
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1332 in rotate_half, code: x2 = x[..., x.shape[-1] // 2 :]
+        x2_1: "bf16[1, 32, 1024, 64]" = key_states[(Ellipsis, slice(64, None, None))];  key_states = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1333 in rotate_half, code: return torch.cat((-x2, x1), dim=-1)
+        neg_1: "bf16[1, 32, 1024, 64]" = -x2_1;  x2_1 = None
+        cat_1: "bf16[1, 32, 1024, 128]" = torch.cat((neg_1, x1_1), dim = -1);  neg_1 = x1_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1359 in apply_rotary_pos_emb, code: k_embed = (k * cos) + (rotate_half(k) * sin)
+        mul_3: "bf16[1, 32, 1024, 128]" = cat_1 * sin;  cat_1 = sin = None
+        k_embed: "bf16[1, 32, 1024, 128]" = mul_2 + mul_3;  mul_2 = mul_3 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1509 in forward, code: query_states = query_states.transpose(1, 2)
+        query_states_1: "bf16[1, 1024, 32, 128]" = q_embed.transpose(1, 2);  q_embed = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1510 in forward, code: key_states = key_states.transpose(1, 2)
+        key_states_1: "bf16[1, 1024, 32, 128]" = k_embed.transpose(1, 2);  k_embed = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1511 in forward, code: value_states = value_states.transpose(1, 2)
+        value_states_1: "bf16[1, 1024, 32, 128]" = value_states.transpose(1, 2);  value_states = None
+        return (query_states_1, key_states_1, value_states_1)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_input_: "bf16[1, 1024, 32, 128]"):
+        l_input_ = L_input_
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:209 in torch_dynamo_resume_in_single_all_to_all_at_187, code: head_dim]).contiguous()
+        reshape: "bf16[1, 1024, 2, 16, 128]" = l_input_.reshape([1, 1024, 2, 16, 128]);  l_input_ = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:210 in torch_dynamo_resume_in_single_all_to_all_at_187, code: input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+        input_t: "bf16[1, 1024, 2, 16, 128]" = reshape.contiguous();  reshape = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:212 in torch_dynamo_resume_in_single_all_to_all_at_187, code: # s, b, n, h
+        permute: "bf16[2, 1, 1024, 16, 128]" = input_t.permute(2, 0, 1, 3, 4);  input_t = None
+        input_t_1: "bf16[2, 1, 1024, 16, 128]" = permute.contiguous();  permute = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:235 in torch_dynamo_resume_in_single_all_to_all_at_187, code: if type in ('dq', 'dk'):
+        output: "bf16[2, 1, 1024, 16, 128]" = torch.empty_like(input_t_1)
+        
+         # File: /u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/distributed/_functional_collectives.py:483 in all_to_all_single, code: tensor = torch.ops._c10d_functional.all_to_all_single(  # type: ignore[attr-defined]
+        tensor: "bf16[2, 1, 1024, 16, 128]" = torch.ops._c10d_functional.all_to_all_single(input_t_1, [1, 1], [1, 1], '1');  input_t_1 = None
+        
+         # File: /u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/distributed/_functional_collectives.py:140 in wait_tensor, code: return torch.ops._c10d_functional.wait_tensor(tensor)  # type: ignore[attr-defined]
+        wait_tensor: "bf16[2, 1, 1024, 16, 128]" = torch.ops._c10d_functional.wait_tensor(tensor);  tensor = None
+        
+         # File: /u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/distributed/_functional_collectives.py:1087 in all_to_all_inplace, code: return output.copy_(
+        work: "bf16[2, 1, 1024, 16, 128]" = output.copy_(wait_tensor);  wait_tensor = work = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:56 in post_func, code: output = input.permute(1, 0, 2, 3, 4).contiguous()
+        permute_1: "bf16[1, 2, 1024, 16, 128]" = output.permute(1, 0, 2, 3, 4);  output = None
+        output_1: "bf16[1, 2, 1024, 16, 128]" = permute_1.contiguous();  permute_1 = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:57 in post_func, code: output = output.reshape(bs, seq_world_size * seq_len, num_head // seq_world_size,
+        reshape_1: "bf16[1, 2048, 16, 128]" = output_1.reshape(1, 2048, 16, 128);  output_1 = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:58 in post_func, code: head_dim).contiguous()
+        output_2: "bf16[1, 2048, 16, 128]" = reshape_1.contiguous();  reshape_1 = None
+        return (output_2,)
+        
+/u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/autograd/function.py:575: UserWarning: Detected non-contiguous tensor in P2P operations. It is user responsibility to guarantee that source and destination tensors have the same contiguity format. (Triggered internally at ../torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:2386.)
+  return super().apply(*args, **kwargs)  # type: ignore[misc]
+/u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/autograd/function.py:575: UserWarning: Detected non-contiguous tensor in P2P operations. It is user responsibility to guarantee that source and destination tensors have the same contiguity format. (Triggered internally at ../torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:2386.)
+  return super().apply(*args, **kwargs)  # type: ignore[misc]
+class GraphModule(torch.nn.Module):
+    def forward(self, L_stack0_: "bf16[1, 2048, 16, 128]", L_query_layer_: "bf16[1, 2048, 16, 128]", L_key_layer_: "bf16[1, 2048, 16, 128]", L_args_0_: "bf16[1, 1, 2048, 2048]"):
+        l_stack0_ = L_stack0_
+        l_query_layer_ = L_query_layer_
+        l_key_layer_ = L_key_layer_
+        l_args_0_ = L_args_0_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1404 in eager_attention_forward, code: query = query.transpose(1, 2)
+        query: "bf16[1, 16, 2048, 128]" = l_query_layer_.transpose(1, 2);  l_query_layer_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1405 in eager_attention_forward, code: key = key.transpose(1, 2)
+        key: "bf16[1, 16, 2048, 128]" = l_key_layer_.transpose(1, 2);  l_key_layer_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1406 in eager_attention_forward, code: value = value.transpose(1, 2)
+        value: "bf16[1, 16, 2048, 128]" = l_stack0_.transpose(1, 2);  l_stack0_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1410 in eager_attention_forward, code: attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+        transpose_3: "bf16[1, 16, 128, 2048]" = key.transpose(2, 3);  key = None
+        matmul: "bf16[1, 16, 2048, 2048]" = torch.matmul(query, transpose_3);  query = transpose_3 = None
+        attn_weights: "bf16[1, 16, 2048, 2048]" = matmul * 0.08838834764831845;  matmul = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1412 in eager_attention_forward, code: causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        causal_mask: "bf16[1, 1, 2048, 2048]" = l_args_0_[(slice(None, None, None), slice(None, None, None), slice(None, None, None), slice(None, 2048, None))];  l_args_0_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1413 in eager_attention_forward, code: attn_weights = attn_weights + causal_mask
+        attn_weights_1: "bf16[1, 16, 2048, 2048]" = attn_weights + causal_mask;  attn_weights = causal_mask = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1415 in eager_attention_forward, code: attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+        softmax: "f32[1, 16, 2048, 2048]" = torch.nn.functional.softmax(attn_weights_1, dim = -1, dtype = torch.float32);  attn_weights_1 = None
+        attn_weights_2: "bf16[1, 16, 2048, 2048]" = softmax.to(torch.bfloat16);  softmax = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1416 in eager_attention_forward, code: attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=training)
+        attn_weights_3: "bf16[1, 16, 2048, 2048]" = torch.nn.functional.dropout(attn_weights_2, p = 0.0, training = True);  attn_weights_2 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1417 in eager_attention_forward, code: attn_output = torch.matmul(attn_weights, value_states)
+        attn_output: "bf16[1, 16, 2048, 128]" = torch.matmul(attn_weights_3, value);  value = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1418 in eager_attention_forward, code: attn_output = attn_output.transpose(1, 2).contiguous()
+        transpose_4: "bf16[1, 2048, 16, 128]" = attn_output.transpose(1, 2);  attn_output = None
+        attn_output_1: "bf16[1, 2048, 16, 128]" = transpose_4.contiguous();  transpose_4 = None
+        return (attn_output_1, attn_weights_3)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, s1: "Sym(s1)"):
+        return (s1,)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, s2: "Sym(s2)", s3: "Sym(s3)", L_input_: "bf16[1, s2, s3, 128]"):
+        l_input_ = L_input_
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:202 in torch_dynamo_resume_in_single_all_to_all_at_187, code: input_t = input.reshape([bs, seq_world_size, global_seq_len // seq_world_size, num_local_head,
+        floordiv: "Sym((s2//2))" = s2 // 2;  s2 = None
+        reshape: "bf16[1, 2, (s2//2), s3, 128]" = l_input_.reshape([1, 2, floordiv, s3, 128]);  l_input_ = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:203 in torch_dynamo_resume_in_single_all_to_all_at_187, code: head_dim]).contiguous()
+        input_t: "bf16[1, 2, (s2//2), s3, 128]" = reshape.contiguous();  reshape = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:205 in torch_dynamo_resume_in_single_all_to_all_at_187, code: else:
+        permute: "bf16[2, 1, (s2//2), s3, 128]" = input_t.permute(1, 0, 2, 3, 4);  input_t = None
+        input_t_1: "bf16[2, 1, (s2//2), s3, 128]" = permute.contiguous();  permute = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:235 in torch_dynamo_resume_in_single_all_to_all_at_187, code: if type in ('dq', 'dk'):
+        output: "bf16[2, 1, (s2//2), s3, 128]" = torch.empty_like(input_t_1)
+        
+         # File: /u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/distributed/_functional_collectives.py:483 in all_to_all_single, code: tensor = torch.ops._c10d_functional.all_to_all_single(  # type: ignore[attr-defined]
+        tensor: "bf16[2, 1, (s2//2), s3, 128]" = torch.ops._c10d_functional.all_to_all_single(input_t_1, [1, 1], [1, 1], '1');  input_t_1 = None
+        
+         # File: /u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/distributed/_functional_collectives.py:140 in wait_tensor, code: return torch.ops._c10d_functional.wait_tensor(tensor)  # type: ignore[attr-defined]
+        wait_tensor: "bf16[2, 1, (s2//2), s3, 128]" = torch.ops._c10d_functional.wait_tensor(tensor);  tensor = None
+        
+         # File: /u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/distributed/_functional_collectives.py:1087 in all_to_all_inplace, code: return output.copy_(
+        work: "bf16[2, 1, (s2//2), s3, 128]" = output.copy_(wait_tensor);  wait_tensor = work = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:52 in post_func, code: output = input.permute(1, 2, 0, 3, 4).contiguous()
+        permute_1: "bf16[1, (s2//2), 2, s3, 128]" = output.permute(1, 2, 0, 3, 4);  output = None
+        output_1: "bf16[1, (s2//2), 2, s3, 128]" = permute_1.contiguous();  permute_1 = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:53 in post_func, code: output = output.reshape(bs, seq_len // seq_world_size, seq_world_size * num_head,
+        mul: "Sym(2*s3)" = 2 * s3;  s3 = None
+        reshape_1: "bf16[1, (s2//2), 2*s3, 128]" = output_1.reshape(1, floordiv, mul, 128);  output_1 = floordiv = mul = None
+        
+         # File: /u/zwang22/desktop/DeepSpeed-internal/deepspeed/sequence/layer.py:54 in post_func, code: head_dim).contiguous()
+        output_2: "bf16[1, (s2//2), 2*s3, 128]" = reshape_1.contiguous();  reshape_1 = None
+        return (output_2,)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_stack0_0_: "bf16[1, 1024, 32, 128]", L_self_modules_o_proj_parameters_weight_: "bf16[4096, 4096]"):
+        l_stack0_0_ = L_stack0_0_
+        l_self_modules_o_proj_parameters_weight_ = L_self_modules_o_proj_parameters_weight_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1521 in torch_dynamo_resume_in_forward_at_1513, code: attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        reshape: "bf16[1, 1024, 4096]" = l_stack0_0_.reshape(1, 1024, -1);  l_stack0_0_ = None
+        attn_output: "bf16[1, 1024, 4096]" = reshape.contiguous();  reshape = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1522 in torch_dynamo_resume_in_forward_at_1513, code: attn_output = self.o_proj(attn_output)
+        attn_output_1: "bf16[1, 1024, 4096]" = torch._C._nn.linear(attn_output, l_self_modules_o_proj_parameters_weight_, None);  attn_output = l_self_modules_o_proj_parameters_weight_ = None
+        return (attn_output_1,)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_stack0_0_: "bf16[1, 1024, 4096]", L_residual_: "bf16[1, 1024, 4096]", L_self_modules_post_attention_layernorm_parameters_weight_: "bf16[4096]", L_self_modules_mlp_modules_gate_proj_parameters_weight_: "bf16[11008, 4096]", L_self_modules_mlp_modules_up_proj_parameters_weight_: "bf16[11008, 4096]", L_self_modules_mlp_modules_down_proj_parameters_weight_: "bf16[4096, 11008]"):
+        l_stack0_0_ = L_stack0_0_
+        l_residual_ = L_residual_
+        l_self_modules_post_attention_layernorm_parameters_weight_ = L_self_modules_post_attention_layernorm_parameters_weight_
+        l_self_modules_mlp_modules_gate_proj_parameters_weight_ = L_self_modules_mlp_modules_gate_proj_parameters_weight_
+        l_self_modules_mlp_modules_up_proj_parameters_weight_ = L_self_modules_mlp_modules_up_proj_parameters_weight_
+        l_self_modules_mlp_modules_down_proj_parameters_weight_ = L_self_modules_mlp_modules_down_proj_parameters_weight_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1578 in torch_dynamo_resume_in_forward_at_1567, code: hidden_states = residual + hidden_states
+        hidden_states: "bf16[1, 1024, 4096]" = l_residual_ + l_stack0_0_;  l_residual_ = l_stack0_0_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1256 in forward, code: hidden_states = hidden_states.to(torch.float32)
+        hidden_states_1: "f32[1, 1024, 4096]" = hidden_states.to(torch.float32)
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1257 in forward, code: variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        pow_1: "f32[1, 1024, 4096]" = hidden_states_1.pow(2)
+        variance: "f32[1, 1024, 1]" = pow_1.mean(-1, keepdim = True);  pow_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1258 in forward, code: hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        add_1: "f32[1, 1024, 1]" = variance + 1e-05;  variance = None
+        rsqrt: "f32[1, 1024, 1]" = torch.rsqrt(add_1);  add_1 = None
+        hidden_states_2: "f32[1, 1024, 4096]" = hidden_states_1 * rsqrt;  hidden_states_1 = rsqrt = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1259 in forward, code: return self.weight * hidden_states.to(input_dtype)
+        to_1: "bf16[1, 1024, 4096]" = hidden_states_2.to(torch.bfloat16);  hidden_states_2 = None
+        hidden_states_3: "bf16[1, 1024, 4096]" = l_self_modules_post_attention_layernorm_parameters_weight_ * to_1;  l_self_modules_post_attention_layernorm_parameters_weight_ = to_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1375 in forward, code: down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        linear: "bf16[1, 1024, 11008]" = torch._C._nn.linear(hidden_states_3, l_self_modules_mlp_modules_gate_proj_parameters_weight_, None);  l_self_modules_mlp_modules_gate_proj_parameters_weight_ = None
+        silu: "bf16[1, 1024, 11008]" = torch.nn.functional.silu(linear, inplace = False);  linear = None
+        linear_1: "bf16[1, 1024, 11008]" = torch._C._nn.linear(hidden_states_3, l_self_modules_mlp_modules_up_proj_parameters_weight_, None);  hidden_states_3 = l_self_modules_mlp_modules_up_proj_parameters_weight_ = None
+        mul_2: "bf16[1, 1024, 11008]" = silu * linear_1;  silu = linear_1 = None
+        down_proj: "bf16[1, 1024, 4096]" = torch._C._nn.linear(mul_2, l_self_modules_mlp_modules_down_proj_parameters_weight_, None);  mul_2 = l_self_modules_mlp_modules_down_proj_parameters_weight_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1584 in torch_dynamo_resume_in_forward_at_1567, code: hidden_states = residual + hidden_states
+        hidden_states_4: "bf16[1, 1024, 4096]" = hidden_states + down_proj;  hidden_states = down_proj = None
+        return (hidden_states_4,)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_hidden_states_: "bf16[1, 1024, 4096]", L_self_parameters_weight_: "bf16[4096]"):
+        l_hidden_states_ = L_hidden_states_
+        l_self_parameters_weight_ = L_self_parameters_weight_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1256 in forward, code: hidden_states = hidden_states.to(torch.float32)
+        hidden_states: "f32[1, 1024, 4096]" = l_hidden_states_.to(torch.float32);  l_hidden_states_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1257 in forward, code: variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        pow_1: "f32[1, 1024, 4096]" = hidden_states.pow(2)
+        variance: "f32[1, 1024, 1]" = pow_1.mean(-1, keepdim = True);  pow_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1258 in forward, code: hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        add: "f32[1, 1024, 1]" = variance + 1e-05;  variance = None
+        rsqrt: "f32[1, 1024, 1]" = torch.rsqrt(add);  add = None
+        hidden_states_1: "f32[1, 1024, 4096]" = hidden_states * rsqrt;  hidden_states = rsqrt = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:1259 in forward, code: return self.weight * hidden_states.to(input_dtype)
+        to_1: "bf16[1, 1024, 4096]" = hidden_states_1.to(torch.bfloat16);  hidden_states_1 = None
+        mul_1: "bf16[1, 1024, 4096]" = l_self_parameters_weight_ * to_1;  l_self_parameters_weight_ = to_1 = None
+        return (mul_1,)
+        
+class GraphModule(torch.nn.Module):
+    def forward(self, L_stack0_last_hidden_state: "bf16[1, 1024, 4096]", L_labels_: "i64[1, 2048]", L_self_modules_lm_head_parameters_weight_: "bf16[32000, 4096]"):
+        l_stack0_last_hidden_state = L_stack0_last_hidden_state
+        l_labels_ = L_labels_
+        l_self_modules_lm_head_parameters_weight_ = L_self_modules_lm_head_parameters_weight_
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:2115 in torch_dynamo_resume_in_forward_at_2094, code: labels = labels[:, start:end]
+        labels: "i64[1, 1024]" = l_labels_[(slice(None, None, None), slice(0, 1024, None))];  l_labels_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/models/llama/modeling_llama.py:2120 in torch_dynamo_resume_in_forward_at_2094, code: logits = self.lm_head(hidden_states[:, slice_indices, :])
+        getitem_1: "bf16[1, 1024, 4096]" = l_stack0_last_hidden_state[(slice(None, None, None), slice(0, None, None), slice(None, None, None))];  l_stack0_last_hidden_state = None
+        logits: "bf16[1, 1024, 32000]" = torch._C._nn.linear(getitem_1, l_self_modules_lm_head_parameters_weight_, None);  getitem_1 = l_self_modules_lm_head_parameters_weight_ = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/loss/loss_utils.py:37 in ForCausalLMLoss, code: logits = logits.float()
+        logits_1: "f32[1, 1024, 32000]" = logits.float()
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/loss/loss_utils.py:38 in ForCausalLMLoss, code: labels = labels.to(logits.device)
+        labels_1: "i64[1, 1024]" = labels.to(device(type='cuda', index=0));  labels = None
+        
+         # File: /u/zwang22/miniconda3/envs/dc/lib/python3.12/site-packages/torch/nn/functional.py:5096 in pad, code: return torch._C._nn.pad(input, pad, mode, value)
+        labels_2: "i64[1, 1025]" = torch._C._nn.pad(labels_1, (0, 1), 'constant', -100);  labels_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/loss/loss_utils.py:41 in ForCausalLMLoss, code: shift_labels = labels[..., 1:].contiguous()
+        getitem_2: "i64[1, 1024]" = labels_2[(Ellipsis, slice(1, None, None))];  labels_2 = None
+        shift_labels: "i64[1, 1024]" = getitem_2.contiguous();  getitem_2 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/loss/loss_utils.py:44 in ForCausalLMLoss, code: logits = logits.view(-1, vocab_size)
+        logits_2: "f32[1024, 32000]" = logits_1.view(-1, 32000);  logits_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/loss/loss_utils.py:45 in ForCausalLMLoss, code: shift_labels = shift_labels.view(-1)
+        shift_labels_1: "i64[1024]" = shift_labels.view(-1);  shift_labels = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/loss/loss_utils.py:47 in ForCausalLMLoss, code: shift_labels = shift_labels.to(logits.device)
+        shift_labels_2: "i64[1024]" = shift_labels_1.to(device(type='cuda', index=0));  shift_labels_1 = None
+        
+         # File: /u/zwang22/desktop/transformers/src/transformers/loss/loss_utils.py:27 in fixed_cross_entropy, code: loss = nn.functional.cross_entropy(source, target, ignore_index=ignore_index, reduction=reduction)
+        loss: "f32[]" = torch.nn.functional.cross_entropy(logits_2, shift_labels_2, ignore_index = -100, reduction = 'mean');  logits_2 = shift_labels_2 = None
+        return (loss, logits)
