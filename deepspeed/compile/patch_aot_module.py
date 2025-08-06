@@ -67,52 +67,6 @@ BS_Shape = None
 NH_Shape = None
 World_Size = None
 
-
-# def extract_gated_mlp_pattern(sigmoid_node: torch.fx.Node) -> list[torch.fx.Node] | None:
-#     if sigmoid_node.op != "call_function" or sigmoid_node.target != torch.ops.aten.sigmoid.default:
-#         return None
-
-#     convert_node = sigmoid_node.args[0]
-#     if not isinstance(convert_node, torch.fx.Node) or convert_node.target != torch.ops.prims.convert_element_type.default:
-#         return None
-
-#     view_node = convert_node.args[0]
-#     if not isinstance(view_node, torch.fx.Node) or view_node.target != torch.ops.aten.view.default:
-#         return None
-
-#     mm_node = view_node.args[0]
-#     if not isinstance(mm_node, torch.fx.Node) or mm_node.target != torch.ops.aten.mm.default:
-#         return None
-#     for user in sigmoid_node.users:
-#         if user.target != torch.ops.aten.mul.Tensor:
-#             continue
-
-#         other_arg = [arg for arg in user.args if arg != sigmoid_node][0]
-#         if not isinstance(other_arg, torch.fx.Node) or other_arg != convert_node:
-#             continue
-
-#         for mul_user in user.users:
-#             if mul_user.target != torch.ops.prims.convert_element_type.default:
-#                 continue
-
-#             for convert_user in mul_user.users:
-#                 if convert_user.target != torch.ops.aten.mul.Tensor:
-#                     continue
-
-#                 for view_user in convert_user.users:
-#                     if view_user.target == torch.ops.aten.view.default:
-#                         return [
-#                             mm_node, 
-#                             view_node, 
-#                             convert_node,  # mm -> view -> convert
-#                             sigmoid_node, 
-#                             user,                # sigmoid -> mul (SiLU)
-#                             mul_user, convert_user,            # convert -> mul
-#                             view_user                         # mul -> view
-#                         ]
-
-#     return None
-
 import operator
 def extract_mlp_pattern_from_silu(silu_node: torch.fx.Node) -> list[torch.fx.Node] | None:
     if silu_node.op != "call_function":
