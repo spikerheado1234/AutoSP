@@ -128,6 +128,7 @@ def wrapper():
         # get seq length and partitioned start, end
         global BS_Shape
         if BS_Shape is None:
+            print(args[0].shape, flush=True)
             batch_size, seq_length = args[0].shape
             BS_Shape = (batch_size, seq_length * World_Size)
         B, S = BS_Shape # S here is full sequence
@@ -171,19 +172,19 @@ def wrapper():
                         node.update_arg(arg_idx, new_arg)
                     arg_idx += 1
             # # position ids
-            # if node.name == "position_ids":
-            #     old_arg = node.args[0]
-            #     start = rank * S_partitioned
-            #     end = (rank + 1) * S_partitioned
-            #     with mod.graph.inserting_before(node):
-            #         new_arg = mod.graph.create_node(
-            #             op=old_arg.op,
-            #             target=old_arg.target,
-            #             args=(start, end),
-            #             kwargs=old_arg.kwargs,
-            #             name=None
-            #         )
-            #         node.replace_input_with(old_arg, new_arg)
+            if node.name == "position_ids":
+                old_arg = node.args[0]
+                start = rank * S_partitioned
+                end = (rank + 1) * S_partitioned
+                with mod.graph.inserting_before(node):
+                    new_arg = mod.graph.create_node(
+                        op=old_arg.op,
+                        target=old_arg.target,
+                        args=(start, end),
+                        kwargs=old_arg.kwargs,
+                        name=None
+                    )
+                    node.replace_input_with(old_arg, new_arg)
             # constant
             if node.name == "reshape":
                 old_arg = node.args[0]
@@ -211,13 +212,13 @@ def wrapper():
                     new_node.args = (node, B, S, N, H, world_size, )
         mod.recompile()
 
-        for node in mod.graph.nodes:
-            res = extract_mlp_pattern_from_silu(node)
-            if res is not None:
-                for mlp_node in res:
-                    mlp_node.meta["recompute"] = CheckpointPolicy.MUST_RECOMPUTE
+        # for node in mod.graph.nodes:
+        #     res = extract_mlp_pattern_from_silu(node)
+        #     if res is not None:
+        #         for mlp_node in res:
+        #             mlp_node.meta["recompute"] = CheckpointPolicy.MUST_RECOMPUTE
 
-        mod.recompile()
+        # mod.recompile()
         return original_aot_module_simplified(mod, args, fw_compiler, bw_compiler, partition_fn, decompositions, keep_inference_input_mutations,
                                             inference_compiler, cudagraphs)
     torch._functorch.aot_autograd.aot_module_simplified = patch_aot_module_simplified
