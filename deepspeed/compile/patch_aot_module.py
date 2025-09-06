@@ -1,3 +1,4 @@
+import pdb
 from torch._functorch.aot_autograd import AOTConfig, create_aot_dispatcher_function
 from torch.utils._pytree import tree_flatten, tree_unflatten
 from functools import wraps
@@ -120,6 +121,7 @@ def wrapper():
         inference_compiler: Optional[Callable] = None,
         cudagraphs: Optional[BoxedBool] = None,
     ) -> nn.Module:
+        print('=======aot_module executed==========')
         # global World_Size
         World_Size = dist.get_world_size()
         world_size = World_Size
@@ -212,6 +214,7 @@ def wrapper():
                     new_node.args = (node, B, S, N, H, world_size, )
         mod.recompile()
 
+
         # for node in mod.graph.nodes:
         #     res = extract_mlp_pattern_from_silu(node)
         #     if res is not None:
@@ -221,6 +224,7 @@ def wrapper():
         # mod.recompile()
         return original_aot_module_simplified(mod, args, fw_compiler, bw_compiler, partition_fn, decompositions, keep_inference_input_mutations,
                                             inference_compiler, cudagraphs)
+
     torch._functorch.aot_autograd.aot_module_simplified = patch_aot_module_simplified
     
 @torch.library.custom_op("ulysses::all_to_all_qkv", mutates_args=())

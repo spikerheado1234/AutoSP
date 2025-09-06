@@ -14,7 +14,8 @@ from torch._functorch._aot_autograd.schemas import (
     SubclassCreationMeta,
 )
 from torch._functorch._aot_autograd.subclass_utils import (
-    get_types_for_subclass,
+    #get_types_for_subclass,
+    get_subclass_typing_container,
     unwrap_tensor_subclasses,
 )
 from torch._functorch._aot_autograd.runtime_wrappers import AOTDispatchAutograd

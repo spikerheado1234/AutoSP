@@ -93,7 +93,7 @@ public:
                 symm_mem->get_buffer(rank, ds_tensor.sizes(), ds_tensor.scalar_type(), 0);
             local_buf.copy_(ds_tensor, true);
 
-            symm_mem->barrier(0);
+            symm_mem->barrier(0, 10000);
             auto chunks = output_buf.flatten().chunk(world_size);
             for (int step = 0; step < world_size; step++) {
                 int remote_rank = (rank - step + world_size) % world_size;
@@ -101,7 +101,7 @@ public:
                     remote_rank, ds_tensor.sizes(), ds_tensor.scalar_type(), 0);
                 chunks[remote_rank].copy_(src_buf.flatten(), true);
             }
-            symm_mem->barrier(0);
+            symm_mem->barrier(0, 10000);
         }
 
         param_registry_->registerGatheredParam(ds_id, output_buf);
