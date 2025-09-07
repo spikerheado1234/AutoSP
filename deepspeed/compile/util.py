@@ -6,33 +6,41 @@
 import functools
 import operator
 from typing import List, Tuple, Dict
+from collections import defaultdict
 
 import torch
-from torch.fx import Node, Graph, GraphModule
+from torch.fx import Node, Graph
 from torch.fx.node import map_aggregate, Argument, map_arg
-from torch._subclasses.fake_tensor import unset_fake_temporarily
+
+try:
+    from torch._subclasses.fake_tensor import unset_fake_temporarily
+except ImportError:
+    # Unsupported torch version
+    pass
 
 import deepspeed.comm as dist
 from deepspeed.accelerator import get_accelerator
-from deepspeed.ops.op_builder import DeepCompileBuilder
-
-sym_size_ops = {
-    operator.ge,
-    operator.le,
-    operator.eq,
-    operator.ne,
-    operator.gt,
-    operator.lt,
-    torch.ops.aten.sym_size.int,
-    operator.getitem,
-}
+from deepspeed.utils.torch import required_torch_version
+from deepspeed.ops.op_builder.dc import DeepCompileBuilder
 
 
 def is_deepcompile_supported() -> bool:
-    return torch.__version__.startswith("2.5.1") and get_accelerator().device_name() == "cuda"
+    return required_torch_version(min_version=2.6, max_version=2.7) and get_accelerator().device_name() == "cuda"
 
 
 dc_handle = None
+
+if is_deepcompile_supported():
+    sym_size_ops = {
+        operator.ge,
+        operator.le,
+        operator.eq,
+        operator.ne,
+        operator.gt,
+        operator.lt,
+        torch.ops.aten.sym_size.int,
+        operator.getitem,
+    }
 
 
 def get_deepcompile_handle():
@@ -54,7 +62,7 @@ def add_pre_backward_hook(hook):
     pre_backward_hooks.append(hook)
 
 
-def pre_backward(is_gradient_accumulation_boundary):
+def deepcompile_backward_prologue(is_gradient_accumulation_boundary):
 
     for hook in pre_backward_hooks:
         hook()
@@ -67,21 +75,7 @@ def log_rank0(msg: str, enable: bool = False):
     if dist.get_rank() == 0 and enable:
         print(msg)
 
-import os
-def log_rank0_graph(gm: GraphModule, enable: bool = False):
-    if dist.get_rank() == 0 and enable:
-        output_path = "/u/zwang22/desktop/bench_dc_ulysses/graph/before_insertion.txt"
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w") as f:
-            f.write("=" * 35 + " Print Graph " + "=" * 35 + "\n\n")
-            f.write(str(gm.graph) + "\n\n")
 
-            f.write("=" * 35 + " Print Node " + "=" * 35 + "\n\n")
-            for node in gm.graph.nodes:
-                f.write(f"{node.op} {node.name} : {node.target}\n")
-                if node.meta:
-                    f.write(f"    meta[val] = {node.meta["val"]} \n")
-    
 def get_no_copy_ops():
     # Need to compile custom ops
     get_deepcompile_handle()
@@ -234,6 +228,27 @@ def get_last_uses(graph: Graph):
         map_arg(node.kwargs, lambda n: register_last_uses(n, node))
 
     return node_to_last_use, user_to_last_uses
+
+
+def get_real_uses(graph: Graph):
+    node_to_uses: Dict[Node, List[Node]] = defaultdict(list)
+    no_copy_ops = get_no_copy_ops()
+
+    def register_last_uses(n: Node, user: Node):
+        if user.target == "output":
+            return
+
+        if user.target in no_copy_ops:
+            users = node_to_uses[user]
+            node_to_uses[n].extend(users)
+        else:
+            node_to_uses[n].append(user)
+
+    for node in reversed(graph.nodes):
+        map_arg(node.args, lambda n: register_last_uses(n, node))
+        map_arg(node.kwargs, lambda n: register_last_uses(n, node))
+
+    return node_to_uses
 
 
 def count_inflight_values(graph: Graph, file_path: str):
@@ -412,3 +427,43 @@ def get_index_by_graph_id(graph_order, target_graph_id):
         if graph_id == target_graph_id:
             return index
     return -1
+
+
+def pad_tensors(specs: List[Tuple[torch.Tensor, int, int]]) -> List[torch.Tensor]:
+    """
+    specs = [
+        (input_ids,     1, pad_token_id),   # Example: Pad the right side with <pad>
+        (attention_mask, 1, 0),             # Example: Pad the right side with 0
+        ...
+    ]
+
+    - Share the "maximum length of the dim dimension" across ranks for all specs
+    - Pad the right side for the missing parts and return
+    - Communication (`all_reduce`) happens only once
+    """
+    assert len(specs) > 0, "specs is empty"
+
+    device = specs[0][0].device
+    # Vectorize local lengths
+    local_sizes = torch.tensor(
+        [tensor.size(dim) for tensor, dim, _ in specs],
+        dtype=torch.long,
+        device=device,
+    )
+
+    # Element-wise MAX across ranks
+    dist.all_reduce(local_sizes, op=dist.ReduceOp.MAX)
+    max_sizes = local_sizes.tolist()
+
+    # Pad each tensor as needed
+    padded: List[torch.Tensor] = []
+    for (tensor, dim, pad_val), max_len in zip(specs, max_sizes):
+        cur_len = tensor.size(dim)
+        if cur_len < max_len:
+            pad_len = max_len - cur_len
+            pad_shape = [0] * (tensor.dim() * 2)  # F.pad specification
+            pad_shape[-(2 * dim + 1)] = pad_len  # Pad the right side
+            tensor = torch.nn.functional.pad(tensor, pad_shape, value=pad_val)
+        padded.append(tensor)
+
+    return padded

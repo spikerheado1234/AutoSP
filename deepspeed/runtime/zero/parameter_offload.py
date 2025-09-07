@@ -106,6 +106,7 @@ class DeepSpeedZeRoOffload(object):
         zero_quantized_weights=False,
         zero_quantized_nontrainable_weights=False,
         zero_module_granularity_threshold=0,
+        log_trace_cache_warnings=False,
     ):
 
         see_memory_usage("DeepSpeedZeRoOffload initialize [begin]", force=True)
@@ -121,6 +122,7 @@ class DeepSpeedZeRoOffload(object):
         self.zero_param_parallel_group = zero_param_parallel_group
         self.zero_quantized_weights = zero_quantized_weights
         self.zero_quantized_nontrainable_weights = zero_quantized_nontrainable_weights
+        self.log_trace_cache_warnings = log_trace_cache_warnings
 
         if offload_param_config is not None and offload_param_config.device != OffloadDeviceEnum.none:
             self.offload_device = offload_param_config.device
@@ -168,7 +170,9 @@ class DeepSpeedZeRoOffload(object):
             timers=self.timers,
             zero_quantized_weights=self.zero_quantized_weights,
             zero_quantized_nontrainable_weights=self.zero_quantized_nontrainable_weights,
-            fast_sharding_for_leaf_module=self.fast_sharding_for_leaf_module)
+            fast_sharding_for_leaf_module=self.fast_sharding_for_leaf_module,
+            log_trace_cache_warnings=self.log_trace_cache_warnings,
+        )
 
         self.forward_hooks = []
         self.backward_hooks = []
@@ -204,7 +208,8 @@ class DeepSpeedZeRoOffload(object):
                 zero_params[0].convert_to_zero_parameters(param_list=non_zero_params)
             else:
                 group = None
-                if mpu:
+                # parallel_state_sp doesn't have get_data_parallel_group
+                if mpu and hasattr(mpu, "get_data_parallel_group"):
                     group = mpu.get_data_parallel_group()
 
                 Init(module=module,
@@ -231,6 +236,8 @@ class DeepSpeedZeRoOffload(object):
         for hook in self.backward_hooks:
             hook.remove()
 
+        self.fwd_pre_hook.remove()
+
         print_rank_0(f'Deleted module hooks: forward = {num_forward_hooks}, backward = {num_backward_hooks}',
                      force=False)
 
@@ -243,10 +250,10 @@ class DeepSpeedZeRoOffload(object):
 
             self.get_param_coordinator().reset_step()
 
-        self.module.register_forward_pre_hook(_start_of_forward_hook)
+        self.fwd_pre_hook = self.module.register_forward_pre_hook(_start_of_forward_hook)
 
         #likely one of them should be enough but just to be safe
-        self._register_hooks_recursively(self.module)
+        self._register_deepspeed_module(self.module)
 
         # Add top module to stack trace
         global FWD_MODULE_STACK
@@ -267,16 +274,16 @@ class DeepSpeedZeRoOffload(object):
                 total_persistent_parameters += param.ds_numel
 
         print_rank_0(
-            f"Parameter Offload: Total persistent parameters: {total_persistent_parameters} in {params_count} params",
+            f"Parameter Offload - Persistent parameters statistics: param_count = {params_count}, numel = {total_persistent_parameters}",
             force=True)
 
         return persistent_params
 
-    def _register_hooks_recursively(self, module, count=[0]):
+    def _register_deepspeed_module(self, module, count=[0]):
         my_count = count[0]
-        module.id = my_count
+        module.ds_id = my_count
 
-        #print(f"{module.__class__} : {module.id}")
+        #print(f"{module.__class__} : {module.ds_id}")
 
         if z3_leaf_module(module):
             for param in module.parameters():
@@ -284,7 +291,7 @@ class DeepSpeedZeRoOffload(object):
         else:
             for child in module.children():
                 count[0] = count[0] + 1
-                self._register_hooks_recursively(child, count=count)
+                self._register_deepspeed_module(child, count=count)
 
         @torch.compiler.disable
         def _pre_forward_module_hook(module, *args):
@@ -340,39 +347,6 @@ class DeepSpeedZeRoOffload(object):
 
         def _pre_backward_module_hook(module, inputs, output):
 
-            if not hasattr(module, "pre_bwd_fn"):
-
-                @instrument_w_nvtx
-                def _run_before_backward_function(sub_module):
-                    # some models (e.g. Albert) may run multiple forwards on the same layer in a loop
-                    # before doing backwards, so each backward will need a pre-fetch - using reference
-                    # counting to support this scenario
-                    #print(f"COUNTER before: {sub_module.applied_pre_backward_ref_cnt}")
-                    if sub_module.applied_pre_backward_ref_cnt > 0:
-                        self.pre_sub_module_backward_function(sub_module)
-                        sub_module.applied_pre_backward_ref_cnt -= 1
-                    #print(f"COUNTER after: {sub_module.applied_pre_backward_ref_cnt}")
-
-                class PreBackwardFunctionForModule(torch.autograd.Function):
-
-                    @staticmethod
-                    def forward(ctx, outputs):
-                        # Capture `module` and _run_before_backward_function
-                        ctx.module = module
-                        ctx.pre_backward_function = _run_before_backward_function
-                        if not hasattr(ctx.module, "applied_pre_backward_ref_cnt"):
-                            ctx.module.applied_pre_backward_ref_cnt = 0
-                        ctx.module.applied_pre_backward_ref_cnt += 1
-                        outputs = outputs.detach()
-                        return outputs
-
-                    @staticmethod
-                    def backward(ctx, *args):
-                        ctx.pre_backward_function(ctx.module)
-                        return args
-
-                module.pre_bwd_fn = PreBackwardFunctionForModule
-
             return apply_to_tensors_only(module.pre_bwd_fn.apply,
                                          output,
                                          warning_msg_fn=_bwd_hook_unexpected_inputs_msg)
@@ -399,43 +373,7 @@ class DeepSpeedZeRoOffload(object):
 
         @torch.compiler.disable
         def _post_backward_module_hook(module, inputs):
-            if not hasattr(module, "ds_grads_remaining"):
-                module.ds_grads_remaining = 0
-
-            if not hasattr(module, "post_bwd_fn"):
-
-                @instrument_w_nvtx
-                def _run_after_backward_function(sub_module):
-                    if sub_module.ds_grads_remaining == 0:
-                        self.post_sub_module_backward_function(sub_module)
-
-                class PostBackwardFunctionModule(torch.autograd.Function):
-
-                    @staticmethod
-                    def forward(ctx, output):
-                        ctx.module = module
-                        if output.requires_grad:
-                            #TODO SOME TIMES post backward does not seem to be triggered debug in detail
-                            #Should only cause increase in memory not correctness issue
-                            #if output.grad_fn.__class__.__name__ == 'ViewBackward':
-                            #    ctx.view=True
-                            #    print(f"Warning view tensor for input to module : {module.__class__.__name__}. Backward hooks may not trigger properly")
-                            #assert len(module.parameters(recurse=False)), "The input tensor to the module is a view, and autograd Function or register_hook is not triggered with view tensors."
-                            #if module.ds_grads_remaining == 0:
-                            #    print(f"Before Forward: {ctx.module.__class__.__name__}")
-                            module.ds_grads_remaining += 1
-                            ctx.post_backward_function = _run_after_backward_function
-                        output = output.detach()
-                        return output
-
-                    @staticmethod
-                    def backward(ctx, *args):
-                        ctx.module.ds_grads_remaining = ctx.module.ds_grads_remaining - 1
-                        if ctx.module.ds_grads_remaining == 0:
-                            ctx.post_backward_function(ctx.module)
-                        return args
-
-                module.post_bwd_fn = PostBackwardFunctionModule
+            module.ds_grads_remaining = 0
 
             return apply_to_tensors_only(module.post_bwd_fn.apply,
                                          inputs,
@@ -448,9 +386,77 @@ class DeepSpeedZeRoOffload(object):
         self.forward_hooks.append(module.register_forward_hook(_post_forward_module_hook))
 
         # Pre backward hook
+        if not hasattr(module, "pre_bwd_fn"):
+
+            @instrument_w_nvtx
+            def _run_before_backward_function(sub_module):
+                # some models (e.g. Albert) may run multiple forwards on the same layer in a loop
+                # before doing backwards, so each backward will need a pre-fetch - using reference
+                # counting to support this scenario
+                #print(f"COUNTER before: {sub_module.applied_pre_backward_ref_cnt}")
+                if sub_module.applied_pre_backward_ref_cnt > 0:
+                    self.pre_sub_module_backward_function(sub_module)
+                    sub_module.applied_pre_backward_ref_cnt -= 1
+                #print(f"COUNTER after: {sub_module.applied_pre_backward_ref_cnt}")
+
+            class PreBackwardFunctionForModule(torch.autograd.Function):
+
+                @staticmethod
+                def forward(ctx, outputs):
+                    # Capture `module` and _run_before_backward_function
+                    ctx.module = module
+                    ctx.pre_backward_function = _run_before_backward_function
+                    if not hasattr(ctx.module, "applied_pre_backward_ref_cnt"):
+                        ctx.module.applied_pre_backward_ref_cnt = 0
+                    ctx.module.applied_pre_backward_ref_cnt += 1
+                    outputs = outputs.detach()
+                    return outputs
+
+                @staticmethod
+                def backward(ctx, *args):
+                    ctx.pre_backward_function(ctx.module)
+                    return args
+
+            module.pre_bwd_fn = PreBackwardFunctionForModule
+
         self.backward_hooks.append(module.register_forward_hook(_pre_backward_module_hook))
 
         # post backward hook
+        if not hasattr(module, "post_bwd_fn"):
+
+            @instrument_w_nvtx
+            def _run_after_backward_function(sub_module):
+                if sub_module.ds_grads_remaining == 0:
+                    self.post_sub_module_backward_function(sub_module)
+
+            class PostBackwardFunctionModule(torch.autograd.Function):
+
+                @staticmethod
+                def forward(ctx, output):
+                    ctx.module = module
+                    if output.requires_grad:
+                        #TODO SOME TIMES post backward does not seem to be triggered debug in detail
+                        #Should only cause increase in memory not correctness issue
+                        #if output.grad_fn.__class__.__name__ == 'ViewBackward':
+                        #    ctx.view=True
+                        #    print(f"Warning view tensor for input to module : {module.__class__.__name__}. Backward hooks may not trigger properly")
+                        #assert len(module.parameters(recurse=False)), "The input tensor to the module is a view, and autograd Function or register_hook is not triggered with view tensors."
+                        #if module.ds_grads_remaining == 0:
+                        #    print(f"Before Forward: {ctx.module.__class__.__name__}")
+                        module.ds_grads_remaining += 1
+                        ctx.post_backward_function = _run_after_backward_function
+                    output = output.detach()
+                    return output
+
+                @staticmethod
+                def backward(ctx, *args):
+                    ctx.module.ds_grads_remaining = ctx.module.ds_grads_remaining - 1
+                    if ctx.module.ds_grads_remaining == 0:
+                        ctx.post_backward_function(ctx.module)
+                    return args
+
+            module.post_bwd_fn = PostBackwardFunctionModule
+
         self.backward_hooks.append(module.register_forward_pre_hook(_post_backward_module_hook))
 
     @torch.no_grad()
@@ -470,14 +476,16 @@ class DeepSpeedZeRoOffload(object):
 
     @torch.no_grad()
     def post_sub_module_forward_function(self, sub_module):
-        see_memory_usage(f"After sub module function {sub_module.__class__.__name__} {sub_module.id} before release",
-                         force=False)
+        see_memory_usage(
+            f"After sub module function {sub_module.__class__.__name__} {sub_module.ds_id} before release",
+            force=False)
 
         param_coordinator = self.get_param_coordinator()
-        param_coordinator.release_sub_module(sub_module)
+        param_coordinator.release_sub_module(sub_module, forward=True)
 
-        see_memory_usage(f"After sub module function {sub_module.__class__.__name__}  {sub_module.id} after release",
-                         force=False)
+        see_memory_usage(
+            f"After sub module function {sub_module.__class__.__name__}  {sub_module.ds_id} after release",
+            force=False)
 
     @torch.no_grad()
     def pre_sub_module_backward_function(self, sub_module):
@@ -492,13 +500,13 @@ class DeepSpeedZeRoOffload(object):
     def post_sub_module_backward_function(self, sub_module):
         # assert sub_module.training, "backward pass is invalid for module in evaluation mode"
         see_memory_usage(
-            f"After sub module backward function {sub_module.__class__.__name__} {sub_module.id} before release",
+            f"After sub module backward function {sub_module.__class__.__name__} {sub_module.ds_id} before release",
             force=False)
 
-        self.get_param_coordinator().release_sub_module(sub_module)
+        self.get_param_coordinator().release_sub_module(sub_module, forward=False)
 
         see_memory_usage(
-            f"After sub module backward function {sub_module.__class__.__name__} {sub_module.id} after release",
+            f"After sub module backward function {sub_module.__class__.__name__} {sub_module.ds_id} after release",
             force=False)
 
     def _set_z3_leaf_modules_by_threshold(self, module, zero_module_granularity_threshold):

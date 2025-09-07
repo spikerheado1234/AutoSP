@@ -4,16 +4,13 @@
 # DeepSpeed Team
 
 import os
-
-from scipy.interpolate import interp1d
-
 import torch
 
 try:
     from torch._subclasses.fake_tensor import unset_fake_temporarily
 except ImportError:
-    # torch < v2.5
-    from torch.fx.experimental.proxy_tensor import maybe_disable_fake_tensor_mode as unset_fake_temporarily
+    # Unsupported torch version
+    pass
 
 import deepspeed
 import deepspeed.comm as dist
@@ -139,6 +136,11 @@ def create_predictor():
     # Extract size and avg_duration from results
     sizes = [result[0] for result in profile_results]
     durations = [result[1] for result in profile_results]
+
+    try:
+        from scipy.interpolate import interp1d
+    except ImportError:
+        raise RuntimeError("Please install scipy to use communication profiler in DeepCompile")
 
     predictor = interp1d(sizes, durations, kind='linear', fill_value="extrapolate")
 

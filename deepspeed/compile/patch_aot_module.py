@@ -1,7 +1,7 @@
 from torch._functorch.aot_autograd import AOTConfig, create_aot_dispatcher_function
 from torch.utils._pytree import tree_flatten, tree_unflatten
 from functools import wraps
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 import torch
 from typing import List, Dict
 from torch.library import Library
@@ -30,7 +30,7 @@ from torch._subclasses.fake_tensor import FakeTensorMode
 from torch._functorch.aot_autograd import AOTConfig, create_aot_dispatcher_function
 from torch.utils._pytree import tree_flatten, tree_unflatten
 from functools import wraps
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol
 import torch
 from typing import List
 from torch._prims_common import CUDARngStateHelper
@@ -60,67 +60,42 @@ from torch.distributed._functional_collectives import all_to_all_inplace
 from torch.fx import GraphModule
 from torch.fx.node import Node
 from torch.fx.passes.shape_prop import ShapeProp
-from .patch_compiled_func import patch_compiled_func, unpatch_compiled_func, get_backward_inputs
-from torch.utils.checkpoint import CheckpointPolicy
+
+from collections.abc import KeysView, Sequence
 
 BS_Shape = None
 NH_Shape = None
 World_Size = None
 
-import operator
-def extract_mlp_pattern_from_silu(silu_node: torch.fx.Node) -> list[torch.fx.Node] | None:
-    if silu_node.op != "call_function":
-        return None
-    if silu_node.target != torch.nn.functional.silu:
-        return None
+class AOTDispatchCompiler(Protocol):
+    """
+    Represents a fw or bw_compiler passed to AOTAutograd.
+    """
 
-    gate_proj_node = silu_node.args[0]
-    if not isinstance(gate_proj_node, torch.fx.Node):
-        return None
-    if gate_proj_node.op != "call_function" or gate_proj_node.target != torch._C._nn.linear:
-        return None
-
-    mul_nodes = [user for user in silu_node.users if user.op == "call_function" and user.target == operator.mul]
-
-    for mul_node in mul_nodes:
-        up_proj_candidate = [arg for arg in mul_node.args if arg != silu_node][0]
-        if not isinstance(up_proj_candidate, torch.fx.Node):
-            continue
-        if up_proj_candidate.op != "call_function" or up_proj_candidate.target != torch._C._nn.linear:
-            continue
-
-        down_proj_candidates = [
-            user for user in mul_node.users
-            if user.op == "call_function" and user.target == torch._C._nn.linear
-        ]
-        for down_proj_node in down_proj_candidates:
-            return [
-                gate_proj_node,
-                silu_node,
-                up_proj_candidate,
-                mul_node,
-                down_proj_node
-            ]
-
-    return None
-
+    def __call__(
+        self,
+        gm: torch.fx.GraphModule,
+        example_inputs: Sequence[InputType],
+    ) -> Any:
+        ...
 
 def wrapper():
     # for the case of aot_module_simplified
-    unpatch_compiled_func()
     original_aot_module_simplified = torch._functorch.aot_autograd.aot_module_simplified
     def patch_aot_module_simplified(
         mod: nn.Module,
         args,
-        fw_compiler: Callable,
-        bw_compiler: Optional[Callable] = None,
+        fw_compiler: AOTDispatchCompiler,
+        bw_compiler: Optional[AOTDispatchCompiler] = None,
         partition_fn: Callable = default_partition,
-        decompositions: Optional[Dict] = None,
+        decompositions: Optional[dict] = None,
         keep_inference_input_mutations=False,
-        inference_compiler: Optional[Callable] = None,
+        inference_compiler: Optional[AOTDispatchCompiler] = None,
         cudagraphs: Optional[BoxedBool] = None,
+        boxed_forward_device_index: Optional[BoxedDeviceIndex] = None,
+        ignore_shape_env: bool = False,
     ) -> nn.Module:
-        # global World_Size
+        global World_Size
         World_Size = dist.get_world_size()
         world_size = World_Size
         rank = dist.get_rank()
@@ -128,11 +103,10 @@ def wrapper():
         # get seq length and partitioned start, end
         global BS_Shape
         if BS_Shape is None:
-            print(args[0].shape, flush=True)
             batch_size, seq_length = args[0].shape
-            BS_Shape = (batch_size, seq_length * World_Size)
+            BS_Shape = (batch_size, seq_length)
         B, S = BS_Shape # S here is full sequence
-        
+            
         # grab N, H info    
         global NH_Shape
         if NH_Shape is None:
@@ -142,6 +116,10 @@ def wrapper():
                     NH_Shape = (num_heads, head_dim)
                     break
         N, H = NH_Shape
+        
+        chunk_size = S // world_size
+        start_idx = rank * chunk_size
+        end_idx = (rank + 1) * chunk_size
         
         # replace seq to partitioned_seq
         def replace_constant_in_args(obj, old_value, new_value):
@@ -161,99 +139,148 @@ def wrapper():
                 return obj
         
         # modify the graph
+        idx = 0
         for node in mod.graph.nodes:
+            if idx == 0:
+                with mod.graph.inserting_after(node):
+                    new_node = mod.graph.create_node('call_function', torch.ops.ulysses.shard.default, (node, B, start_idx, end_idx, ), {}, name=None)
+                    node.replace_all_uses_with(new_node)
+                    new_node.args = (node, B, start_idx, end_idx, )
             # constant
             S_partitioned = S // World_Size
-            if "causal_mask" in node.name:
+            if node.name == "view" or node.name == "view_1" or node.name == "view_2" or node.name == "reshape_1":
                 arg_idx = 0
                 for arg in node.args:
                     if not isinstance(arg, Node):
-                        new_arg = replace_constant_in_args(arg, S_partitioned, S)
+                        new_arg = replace_constant_in_args(arg, S, S_partitioned)
                         node.update_arg(arg_idx, new_arg)
                     arg_idx += 1
-            # # position ids
             if node.name == "position_ids":
                 old_arg = node.args[0]
-                start = rank * S_partitioned
-                end = (rank + 1) * S_partitioned
                 with mod.graph.inserting_before(node):
                     new_arg = mod.graph.create_node(
                         op=old_arg.op,
                         target=old_arg.target,
-                        args=(start, end),
-                        kwargs=old_arg.kwargs,
-                        name=None
-                    )
-                    node.replace_input_with(old_arg, new_arg)
-            # constant
-            if node.name == "reshape":
-                old_arg = node.args[0]
-                with mod.graph.inserting_before(node):
-                    new_arg = mod.graph.create_node(
-                        op=old_arg.op,
-                        target=old_arg.target,
-                        args=(0, S),
+                        args=(0, S_partitioned),
                         kwargs=old_arg.kwargs,
                         name=None
                     )
                     node.replace_input_with(old_arg, new_arg) 
-            import torch.nn.functional as F
-            if node.target == F.scaled_dot_product_attention:
+            if node.name == "attn_output":
                 qkv = list(node.args[:3])
-                file_names = ["query", "key", "value"]
+                node_names = ["query", "key", "value"]
                 for i, old_arg in enumerate(qkv):
                     with mod.graph.inserting_after(old_arg):
-                        new_arg = mod.graph.create_node('call_function', torch.ops.ulysses.all_to_all_qkv.default, (old_arg, B, S, N, H, world_size, file_names[i], ), {}, name=None)
+                        new_arg = mod.graph.create_node('call_function', torch.ops.ulysses.all_to_all_qkv.default, (old_arg, B, S, N, H, world_size, node_names[i]), {}, name=None)
                         old_arg.replace_all_uses_with(new_arg)
-                        new_arg.args = (old_arg, B, S, N, H, world_size, file_names[i], )
+                        new_arg.args = (old_arg, B, S, N, H, world_size, node_names[i],)
                 with mod.graph.inserting_after(node):
                     new_node = mod.graph.create_node('call_function', torch.ops.ulysses.all_to_all_out.default, (node, B, S, N, H, world_size, ), {}, name=None)
                     node.replace_all_uses_with(new_node)
                     new_node.args = (node, B, S, N, H, world_size, )
+            idx += 1
         mod.recompile()
-
-        # for node in mod.graph.nodes:
-        #     res = extract_mlp_pattern_from_silu(node)
-        #     if res is not None:
-        #         for mlp_node in res:
-        #             mlp_node.meta["recompute"] = CheckpointPolicy.MUST_RECOMPUTE
-
-        # mod.recompile()
         return original_aot_module_simplified(mod, args, fw_compiler, bw_compiler, partition_fn, decompositions, keep_inference_input_mutations,
                                             inference_compiler, cudagraphs)
     torch._functorch.aot_autograd.aot_module_simplified = patch_aot_module_simplified
     
+    # for the case of aot_module
+    def patch_aot_function(
+        fn: Callable,
+        fw_compiler: Callable,
+        bw_compiler: Optional[Callable] = None,
+        partition_fn: Callable = None,
+        decompositions: Optional[dict] = None,
+        num_params_buffers: int = 0,
+        keep_inference_input_mutations: bool = False,
+        inference_compiler: Optional[Callable] = None,
+        *,
+        dynamic=False,
+        enable_log=True,
+    ) -> Callable:
+        if bw_compiler is None:
+            bw_compiler = fw_compiler
+        if inference_compiler is None:
+            inference_compiler = fw_compiler
+
+        aot_config = AOTConfig(
+            fw_compiler=fw_compiler,
+            bw_compiler=bw_compiler,
+            inference_compiler=inference_compiler,
+            partition_fn=partition_fn,
+            decompositions=decompositions,
+            num_params_buffers=num_params_buffers,
+            aot_id=0,
+            keep_inference_input_mutations=keep_inference_input_mutations,
+            dynamic_shapes=dynamic,
+            aot_autograd_arg_pos_to_source=None,
+            is_export=False,
+            no_tangents=False,
+            enable_log=enable_log,
+        )
+        cached_res = None
+
+        @wraps(fn)
+        def returned_function(*args, **kwargs):
+            nonlocal cached_res
+            flat_args = tree_flatten((args, kwargs))[0]
+            if cached_res is None:
+                from torch._functorch.aot_autograd import create_tree_flattened_fn, construct_fake_mode, process_inputs
+
+                flat_fn, out_spec = create_tree_flattened_fn(fn, args, kwargs)
+                fake_mode, shape_env = construct_fake_mode(flat_args, aot_config)
+                fake_flat_args = process_inputs(flat_args, aot_config, fake_mode, shape_env)
+
+                compiled_fn, _ = create_aot_dispatcher_function(
+                    flat_fn,
+                    fake_flat_args,
+                    aot_config,
+                    fake_mode,
+                    shape_env,
+                )
+                cached_res = (compiled_fn, out_spec)
+
+            compiled_fn, out_spec = cached_res
+            out = compiled_fn(flat_args)
+            return out_spec.unflatten(out)
+        return returned_function
+    torch._functorch.aot_autograd.aot_function = patch_aot_function
+    
+@torch.library.custom_op("ulysses::shard", mutates_args=())
+def shard(input_tensor: torch.Tensor, B: int, start_idx: int, end_idx: int) -> torch.Tensor:
+    sharded = input_tensor[:, start_idx:end_idx]
+    return sharded.clone()
+@shard.register_fake
+def _(input_tensor, B, start_idx, end_idx):
+    fake_tensor = input_tensor.new_empty((B, end_idx - start_idx))
+    return fake_tensor
+
 @torch.library.custom_op("ulysses::all_to_all_qkv", mutates_args=())
-def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int, file_name: str) -> torch.Tensor:
+def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int, node_name: str) -> torch.Tensor:
     # b, n, s, h
     rank = dist.get_rank()
     input_t = input_tensor.reshape([B, world_size, N // world_size, S // world_size, H]).contiguous()
-    input_t = input_t.permute(1, 0, 3, 2, 4).contiguous()
+    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=dist.group.WORLD)
-    output = output.permute(1, 0, 2, 3, 4).contiguous()  
-    output = output.reshape(B, S, N // world_size, H).contiguous() 
-    output = output.transpose(1, 2).contiguous() 
-    rank = dist.get_rank()
-    torch.cuda.synchronize()
-    dist.barrier()
+    output = output.permute(1, 2, 0, 3, 4).contiguous()  
+    output = output.reshape(B, N // world_size, S, H).contiguous()
     return output
 @torch.library.register_fake("ulysses::all_to_all_qkv")
-def _(input_tensor, B, S, N, H, world_size, file_name):
+def _(input_tensor, B, S, N, H, world_size, node_name: str):
     fake_tensor = input_tensor.new_empty((B, N // world_size, S, H))
     return fake_tensor
 def all_to_all_qkv_setup_context(ctx, inputs, output) -> Tensor:
-    input_tensor, B, S, N, H, world_size, file_name = inputs
-    ctx.saved_data = (B, S, N, H, world_size)
+    input_tensor, B, S, N, H, world_size, node_name = inputs
+    ctx.saved_data = (B, S, N, H, world_size, node_name)
 def all_to_all_qkv_backward(ctx, grad):
-    B, S, N, H, world_size = ctx.saved_data
-    input_t = grad.reshape([B, N // world_size, world_size, S // world_size, H]).contiguous()
-    input_t = input_t.permute(2, 0, 3, 1, 4).contiguous()
+    B, S, N, H, world_size, node_name = ctx.saved_data
+    input_t = grad.reshape([B, N // world_size, world_size, S // world_size, H])
+    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=dist.group.WORLD)
-    output = output.permute(1, 2, 0, 3, 4).contiguous() 
-    output = output.reshape(B, S // world_size, N, H).contiguous()
-    output = output.transpose(1, 2).contiguous()
+    output = output.permute(1, 0, 2, 3, 4).contiguous() 
+    output = output.reshape(B, N, S // world_size, H)
     return (output, None, None, None, None, None, None)
 torch.library.register_autograd(
     "ulysses::all_to_all_qkv", all_to_all_qkv_backward, setup_context=all_to_all_qkv_setup_context
@@ -262,13 +289,13 @@ torch.library.register_autograd(
 @torch.library.custom_op("ulysses::all_to_all_out", mutates_args=())
 def all_to_all_out(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int) -> torch.Tensor:
     # b, n, s, h
+    rank = dist.get_rank()
     input_t = input_tensor.reshape([B, N // world_size, world_size, S // world_size, H]).contiguous()
-    input_t = input_t.permute(2, 0, 3, 1, 4).contiguous()
+    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=dist.group.WORLD)
-    output = output.permute(1, 2, 0, 3, 4).contiguous() 
-    output = output.reshape(B, S // world_size, N, H).contiguous()
-    output = output.transpose(1, 2).contiguous()
+    output = output.permute(1, 0, 2, 3, 4).contiguous() 
+    output = output.reshape(B, N, S // world_size, H).contiguous()
     return output
 @torch.library.register_fake("ulysses::all_to_all_out")
 def _(input_tensor, B, S, N, H, world_size):
@@ -280,13 +307,12 @@ def all_to_all_out_setup_context(ctx, inputs, output) -> Tensor:
 def all_to_all_out_backward(ctx, grad):
     B, S, N, H, world_size = ctx.saved_data
     input_t = grad.reshape([B, world_size, N // world_size, S // world_size, H]).contiguous()
-    input_t = input_t.permute(1, 0, 3, 2, 4).contiguous()
+    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=dist.group.WORLD)
-    output = output.permute(1, 0, 2, 3, 4).contiguous()  
-    output = output.reshape(B, S, N // world_size, H).contiguous()
-    output = output.transpose(1, 2).contiguous() 
-    return (output, None, None, None, None, None)
+    output = output.permute(1, 2, 0, 3, 4).contiguous()  
+    output = output.reshape(B, N // world_size, S, H).contiguous() 
+    return (output, None, None, None, None, None, None)
 torch.library.register_autograd(
     "ulysses::all_to_all_out", all_to_all_out_backward, setup_context=all_to_all_out_setup_context
 )

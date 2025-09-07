@@ -24,8 +24,10 @@ def init_z1(engine, backend, compile_config, compile_kwargs, schedule=None):
     optimizer._grad_acc_hooks.clear()
 
     dc = get_deepcompile_handle()
-    dc.init(engine.data_parallel_group, engine.zero_reduce_bucket_size(), compile_config.double_buffer,
-            compile_config.symmetric_memory, is_backend_inductor(backend))
+    dc.init(engine.data_parallel_group,
+            engine.zero_reduce_bucket_size(), compile_config.double_buffer, compile_config.symmetric_memory,
+            is_backend_inductor(backend), compile_config.sync_before_reduce, compile_config.sync_after_reduce, False,
+            False)
 
     grad_buffer = {}
 
@@ -74,4 +76,7 @@ def init_z1(engine, backend, compile_config, compile_kwargs, schedule=None):
     init_schedule(schedule)
 
     engine.launch_compile_passes = launch_compile_passes
-    return make_backend(backend, compile_kwargs=compile_kwargs, free_activation=False)
+    return make_backend(backend,
+                        compile_kwargs=compile_kwargs,
+                        free_activation=False,
+                        debug_log=compile_config.debug_log)

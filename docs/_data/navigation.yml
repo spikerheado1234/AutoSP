@@ -8,7 +8,7 @@ main:
   - title: 'Documentation'
     url: https://deepspeed.readthedocs.io/
   - title: 'GitHub'
-    url: https://github.com/microsoft/DeepSpeed
+    url: https://github.com/deepspeedai/DeepSpeed
 
 lnav:
   - title: 'Training'
@@ -121,6 +121,8 @@ lnav:
         url: /tutorials/sparse-attention/
       - title: 'Transformer Kernel'
         url: /tutorials/transformer_kernel/
+      - title: Ulysses Sequence Parallelism Plus for HF Transformers
+        url: /tutorials/ulysses-alst-sequence-pallellism
       - title: 'ZeRO-Offload'
         url: /tutorials/zero-offload/
       - title: 'ZeRO'

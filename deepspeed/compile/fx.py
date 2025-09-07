@@ -56,54 +56,6 @@ def add_args_process(graph: Graph,
 
     return new_nodes
 
-def add_qkv_alltoall(graph: Graph,
-                    node: Node,
-                    fn: Callable[..., Any],
-                    extra_args: List[int] = [],
-                    name=None,
-                    meta={}) -> List[Node]:
-    new_nodes = []
-    with graph.inserting_before(node):
-        target_args = [arg for arg in node.args if isinstance(arg, Node) and arg.name != 'expand_6']
-
-        for arg in target_args:
-            new_node = graph.create_node('call_function', fn, (arg, 1,), name=name)
-            for k, v in meta.items():
-                new_node.meta[k] = v
-            node.replace_input_with(arg, new_node)
-            new_nodes.append(new_node)
-    
-    return new_nodes
-
-def add_attn_out_alltoall(graph: Graph,
-                    node: Node,
-                    fn: Callable[..., Any],
-                    extra_args: List[int] = [],
-                    name=None,
-                    meta={}) -> Node:
-    
-    with graph.inserting_after(node):
-        args = (node, 2,)
-
-        node_users = node.users.keys()
-        new_node = graph.create_node('call_function', fn, args, {}, name=name)
-        users = {}
-        for u in node_users:
-            if u != new_node:
-                users[u] = (node, new_node)
-        for u, (old_in, new_in) in users.items():
-            u.replace_input_with(old_in, new_in)
-
-    # for k, v in meta.items():
-    #     new_node.meta[k] = v
-
-    return new_node
-
-def replace_node(graph: Graph, node: Node):
-    for old_node in node._input_nodes:
-        new_node = graph.create_node(op="call_function", target=torch.ops.mylib.boop.default, args=(old_node,))
-        node.replace_input_with(old_node, new_node)
-        node.replace_all_uses_with(new_node)
 
 def add_postprocess(graph: Graph,
                     node: Node,
@@ -130,9 +82,6 @@ def add_postprocess(graph: Graph,
         new_node.meta[k] = v
 
     return new_node
-
-
-ops_no_wait = [torch.ops.aten.sym_size.int]
 
 
 def _make_node_meta(node: Node, ds_id: int, comm: bool):

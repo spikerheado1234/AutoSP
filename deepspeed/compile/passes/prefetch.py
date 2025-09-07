@@ -136,7 +136,8 @@ def schedule_prefetch(gm: GraphModule, graph_id: int, graph_order: List[int], pr
 
         new_order_rev.append(node)
 
-        if node.op != "placeholder" and order_rev[i + 1].op == "placeholder":
+        if (node.op != "placeholder"
+                and node.target != torch.ops.dc.reload_parameter) and order_rev[i + 1].op == "placeholder":
             for ag_group in prefetch_ag_groups:
                 assert len(ag_group) > 0
                 new_order_rev.append(ag_group)

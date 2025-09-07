@@ -225,6 +225,12 @@ def broadcast(tensor, src, group=None, async_op=False, prof=False, log_name='bro
 
 
 @timed_op
+def broadcast_object_list(object_list, src, group=None, device=None):
+    global cdb
+    return cdb.broadcast_object_list(object_list=object_list, src=src, group=group, device=device)
+
+
+@timed_op
 def all_gather(tensor_list,
                tensor,
                group=None,
@@ -234,6 +240,12 @@ def all_gather(tensor_list,
                debug=get_caller_func()):
     global cdb
     return cdb.all_gather(tensor_list=tensor_list, tensor=tensor, group=group, async_op=async_op)
+
+
+@timed_op
+def all_gather_object(object_list, obj, group=None, prof=False, log_name='all_gather_object', debug=get_caller_func()):
+    global cdb
+    return cdb.all_gather_object(object_list=object_list, obj=obj, group=group)
 
 
 def has_reduce_scatter_tensor():
@@ -709,9 +721,13 @@ def mpi_discovery(distributed_port=TORCH_DISTRIBUTED_DEFAULT_PORT, verbose=True)
     master_addr = None
     if rank == 0:
         import shlex
-        hostname_cmd = shlex.split("hostname -I")
-        result = subprocess.check_output(hostname_cmd)
-        master_addr = result.decode('utf-8').split()[0]
+        try:
+            hostname_cmd = shlex.split("hostname -I")
+            result = subprocess.check_output(hostname_cmd)
+            master_addr = result.decode('utf-8').split()[0]
+        except subprocess.CalledProcessError:  # hostname -I not available (e.g. on macOS)
+            import socket
+            master_addr = socket.gethostbyname(socket.gethostname())
     master_addr = comm.bcast(master_addr, root=0)
 
     # Determine local rank by assuming hostnames are unique

@@ -9,7 +9,7 @@ from typing import List, Dict
 import torch
 from torch.fx import Graph, Node, GraphModule
 
-from ..util import get_input_nodes, get_param_nodes, get_index_by_graph_id, get_deepcompile_handle, get_last_uses
+from ..util import get_input_nodes, get_param_nodes, get_index_by_graph_id, get_deepcompile_handle, get_real_uses
 from ..fx import add_postprocess, _make_node_meta, get_output_node, move_primals_to_head
 from ..profilers.graph_profile import ProfilingInterpreter
 from ..list_schedule import fast_free_schedule
@@ -46,11 +46,11 @@ def add_allgather(graph_id: int, graph: Graph, node: Node, ds_id: int):
     return new_ag_node
 
 
-def add_release(graph_id: int, graph: Graph, node: Node, release_node: Node, ds_id: int):
+def add_release(graph_id: int, graph: Graph, node: Node, release_node: Node, ds_id: int, n_users: int):
     new_node = add_postprocess(graph,
                                node,
                                torch.ops.dc.release_param.default,
-                               extra_args=[graph_id, ds_id],
+                               extra_args=[graph_id, ds_id, n_users],
                                name=f"release_ds_param_{release_node.target}_{node.name}_{ds_id}",
                                meta=_make_node_meta(node, ds_id, False))
     new_node.meta["val"] = None
@@ -67,16 +67,14 @@ def add_reduce(graph_id: int, graph: Graph, grad_node: Node, param_name: str, ds
 
 
 def add_gather_and_release(graph_id: int, graph: Graph, param_manager, param_nodes: List[Node]) -> Graph:
-    ag_nodes = []
-    for pn in param_nodes:
-        ag_node = add_allgather(graph_id, graph, pn, param_manager.ds_ids[pn.name])
-        ag_nodes.append((pn, ag_node))
 
-    node_to_last_use, _ = get_last_uses(graph)
-    for pn, ag in ag_nodes:
-        last_use = node_to_last_use[ag]
+    node_to_uses = get_real_uses(graph)
+    for pn in param_nodes:
+        add_allgather(graph_id, graph, pn, param_manager.ds_ids[pn.name])
         ds_id = param_manager.ds_ids[pn.name]
-        add_release(graph_id, graph, last_use, pn, ds_id)
+        users = node_to_uses[pn]
+        for user in users:
+            add_release(graph_id, graph, user, pn, ds_id, len(users))
 
     return move_primals_to_head(graph)
 
@@ -101,12 +99,12 @@ def add_z3_gather_release_fw(gm: GraphModule,
                              debug_log=False) -> GraphModule:
 
     nz3 = get_deepcompile_handle()
-    graph = gm.graph
 
     real_inputs = create_inputs_fn()
     param_indices = profiling_results[graph_id].param_indices
 
-    graph = add_gather_and_release(graph_id, graph, param_manager[graph_id], get_param_nodes(graph, param_indices))
+    gm.graph = add_gather_and_release(graph_id, gm.graph, param_manager[graph_id],
+                                      get_param_nodes(gm.graph, param_indices))
 
     nz3.register_graph_z3(graph_id, [v[1] for v in param_indices])  # Need this before profiling
 
@@ -165,7 +163,12 @@ def add_z3_gather_release_bw(gm: GraphModule,
     if rank == 0 and debug_log:
         print(f"Bwd before scheduling graph {graph_index} graph_id={graph_id} {gm.graph}")
 
-    gm.graph = fast_free_schedule(gm.graph, get_accelerator().available_memory(), 0, debug_log=debug_log)
+    gm.graph = fast_free_schedule(
+        gm.graph,
+        get_accelerator().available_memory(),
+        0,  # unused
+        debug_log=debug_log)
+
     return gm
 
 

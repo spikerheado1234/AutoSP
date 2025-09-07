@@ -11,7 +11,11 @@ from dataclasses import dataclass
 import torch
 from torch.fx import Graph, Node
 from torch.fx.node import map_arg
-from torch.utils._pytree import tree_iter
+
+try:
+    from torch.utils._pytree import tree_iter
+except ImportError:
+    pass
 
 from .util import get_last_uses, is_release_node
 from .fx import get_output_node
@@ -281,7 +285,11 @@ def fast_free_schedule(graph: Graph, available_mem: int, output_size: int, debug
         graph)
 
     unscheduled_ags = [n for n in unscheduled if n.target == torch.ops.dc.allgather_param.default]
-    release_nodes = {n.args[2]: n for n in unscheduled if is_release_node(n)}
+
+    release_nodes = defaultdict(list)
+    for n in unscheduled:
+        if is_release_node(n):
+            release_nodes[n.args[2]].append(n)
 
     ag_nodes_in_path = {}
     for ag_node in unscheduled_ags:
@@ -332,7 +340,11 @@ def fast_free_schedule(graph: Graph, available_mem: int, output_size: int, debug
                                         if n.target == torch.ops.dc.allgather_param.default)
                 free_acc_mem = sum(n.meta["tensor_size"] for n in diff_required_nodes
                                    if n.target == torch.ops.dc.allgather_param.default)
-                schedule_until_free = schedule_until_ag + diff_required_nodes + [release_nodes[ds_id]]
+
+                schedule_until_free = schedule_until_ag + diff_required_nodes
+                for release_node in release_nodes[ds_id]:
+                    if release_node not in schedule_until_free:
+                        schedule_until_free.append(release_node)
 
                 n_scheduled_ags = len(
                     [n for n in schedule_until_free if n.target == torch.ops.dc.allgather_param.default])

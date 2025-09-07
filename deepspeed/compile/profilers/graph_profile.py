@@ -8,16 +8,15 @@ from typing import Any, Tuple, Dict
 import statistics
 
 import torch
-from torch.utils._pytree import tree_all, tree_leaves
 from torch.fx import GraphModule, Interpreter
 from torch.fx.node import map_aggregate
 
-from torch._subclasses.fake_tensor import is_fake
 try:
-    from torch._subclasses.fake_tensor import unset_fake_temporarily
+    from torch.utils._pytree import tree_all, tree_leaves
+    from torch._subclasses.fake_tensor import unset_fake_temporarily, is_fake
 except ImportError:
-    # torch < v2.5
-    from torch.fx.experimental.proxy_tensor import maybe_disable_fake_tensor_mode as unset_fake_temporarily
+    # Unsupported torch version
+    pass
 
 import deepspeed.comm as dist
 from deepspeed.accelerator import get_accelerator
@@ -52,6 +51,26 @@ def _node_size(out):
     return sum([v.element_size() * v.numel() for v in tree_leaves(out) if torch.is_tensor(v)])
 
 
+def _get_mem_usage_out_of_torch():
+
+    adjust = 0
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+
+        current_dev_id = get_accelerator().current_device()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(current_dev_id)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+
+        torch_alloc = get_accelerator().memory_allocated()
+        adjust = info.used - torch_alloc
+    except:
+        # pynvml not available
+        pass
+
+    return adjust
+
+
 # https://pytorch.org/tutorials/intermediate/fx_profiling_tutorial.html
 class ProfilingInterpreter(Interpreter):
 
@@ -69,6 +88,7 @@ class ProfilingInterpreter(Interpreter):
         self.distributed = dist.is_initialized()
         self.allgather_mem: Dict[int, int] = {}
         self.debug_log = debug_log
+        self.mem_usage_out_of_torch = 0
 
     def run(self, *args) -> Any:
         """Run the graph with profiling enabled.
@@ -82,6 +102,7 @@ class ProfilingInterpreter(Interpreter):
 
             with unset_fake_temporarily():
                 with get_accelerator().random().fork_rng(devices=[self.device]):
+                    self.mem_usage_out_of_torch = _get_mem_usage_out_of_torch()
                     return_val = super().run(*args)
         except Exception as e:
             msg = e.msg if "msg" in dir(e) else str(e)
@@ -96,7 +117,7 @@ class ProfilingInterpreter(Interpreter):
         if n.op in {"placeholder", "output"}:
             n.meta["device_time"] = 0.0
             n.meta["wall_time"] = 0.0
-            n.meta["memory"] = 0
+            n.meta["alloc_mem"] = 0
             n.meta["max_memory"] = 0
             n.meta["tensor_size"] = _node_size(n)
             return super().run_node(n)
@@ -127,8 +148,8 @@ class ProfilingInterpreter(Interpreter):
             device_time, wall_time, alloc_mem, max_mem, tensor_size = self.cache[cache_key]
             n.meta["device_time"] = device_time
             n.meta["wall_time"] = wall_time
-            n.meta["alloc_memory"] = alloc_mem
-            n.meta["max_memory"] = max_mem
+            n.meta["alloc_mem"] = alloc_mem
+            n.meta["max_mem"] = max_mem
             n.meta["tensor_size"] = tensor_size
 
         is_release_op = is_release_node(n)
@@ -161,8 +182,8 @@ class ProfilingInterpreter(Interpreter):
         if is_comm_op(n):
             dist.barrier()
 
-        alloc_mem = get_accelerator().memory_allocated() - alloc_mem_start
-        max_memory = get_accelerator().max_memory_allocated() - max_mem_start
+        alloc_mem = get_accelerator().memory_allocated() - alloc_mem_start + self.mem_usage_out_of_torch
+        max_memory = get_accelerator().max_memory_allocated() - max_mem_start + self.mem_usage_out_of_torch
         tensor_size = _node_size(out)
 
         def partition_param_if_necessary(v):
@@ -224,7 +245,7 @@ class MemoryProfilingInterpreter(Interpreter):
         try:
             assert _all_real_if_tensor(args), "Inputs must be real tensors"
             self.nz3.enable_profiling(True)
-            self.mem_adjustment = 0
+            self.mem_usage_out_of_torch = _get_mem_usage_out_of_torch()
 
             with unset_fake_temporarily():
                 with get_accelerator().random().fork_rng(devices=[self.device]):
@@ -249,8 +270,8 @@ class MemoryProfilingInterpreter(Interpreter):
 
             del args, kwargs
 
-        current_alloc = get_accelerator().memory_allocated()
-        max_alloc = get_accelerator().max_memory_allocated()
+        current_alloc = get_accelerator().memory_allocated() + self.mem_usage_out_of_torch
+        max_alloc = get_accelerator().max_memory_allocated() + self.mem_usage_out_of_torch
         vals_to_bcast = torch.tensor([current_alloc, max_alloc], device=self.device)
         dist.all_reduce(vals_to_bcast, dist.ReduceOp.MAX)
         current_alloc = vals_to_bcast[0].item()
