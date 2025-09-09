@@ -1079,11 +1079,9 @@ def solve_min_cut(
         if "val" in node.meta:
             val_ = node.meta["val"]
             if isinstance(val_, torch.Tensor) and val_.dim() >= 2:
-                size_ = hint_int(val_.shape[1], fallback=512)
+                size_ = max(size_, val_.shape[1])
                 size_ = min(size_, 32768) 
 
-        print(f"{node.target}: {size_} =========== ", flush=True)
-        
         if min_cut_options.ban_if_not_in_allowlist:
             if not op_types.is_recomputable(node):
                 return False
@@ -1103,12 +1101,9 @@ def solve_min_cut(
                 _size_of(i) for i in node.args if isinstance(i, fx.Node)
             )
             output_size = _size_of(node)
-            
-            reduction_threshold = 4 if size_ <= 1024 else 8
-            if output_size * reduction_threshold < input_tensors_size:
-                return True
-                
+            return output_size * 4 < input_tensors_size
         return False
+
 
     def is_materialized(node):
         if node.op == "placeholder":
