@@ -1046,17 +1046,6 @@ def solve_min_cut(
 
         return False
 
-    def get_sequence_length(node) -> int:
-        """Extract sequence length from node metadata"""
-        if "val" not in node.meta:
-            return 512 
-        
-        val = node.meta["val"]
-        if isinstance(val, torch.Tensor) and val.dim() >= 2:
-            seq_dim = hint_int(val.shape[1], fallback=512)
-            return min(seq_dim, 32768) 
-        return 512
-        
     def should_ban_recomputation(node):
         """Sequence-aware recomputation banning logic"""
         if node.op != "call_function":
@@ -1086,22 +1075,27 @@ def solve_min_cut(
         if get_aten_target(node) in must_save_set:
             return True
 
-        seq_length = get_sequence_length(node)
+        size_ = 512
+        if "val" in node.meta:
+            val_ = node.meta["val"]
+            if isinstance(val_, torch.Tensor) and val_.dim() >= 2:
+                size_ = hint_int(val_.shape[1], fallback=512)
+                size_ = min(size_, 32768) 
+
+        print(f"{node.target}: {size_} =========== ", flush=True)
         
         if min_cut_options.ban_if_not_in_allowlist:
             if not op_types.is_recomputable(node):
                 return False
 
         if min_cut_options.ban_if_materialized_backward and is_materialized_backwards(node):
-            if seq_length > 4096:
+            if size_ > 4096:
                 log.info("allowing recomputation despite backward materialization for long sequence attention: %s", node)
                 return False
             log.info("materialized backwards: %s %s", node, tuple(node.users))
             return True
 
         if node.dist_from_bw < 1000 and node.dist_from_bw > config.max_dist_from_bw:
-            if seq_length <= 1024:
-                return True
             return False
 
         if min_cut_options.ban_if_reduction:
@@ -1110,7 +1104,7 @@ def solve_min_cut(
             )
             output_size = _size_of(node)
             
-            reduction_threshold = 4 if seq_length <= 1024 else 8
+            reduction_threshold = 4 if size_ <= 1024 else 8
             if output_size * reduction_threshold < input_tensors_size:
                 return True
                 
