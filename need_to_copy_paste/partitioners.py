@@ -1075,19 +1075,18 @@ def solve_min_cut(
         if get_aten_target(node) in must_save_set:
             return True
 
-        size_ = 512
-        if "val" in node.meta:
-            val_ = node.meta["val"]
-            if isinstance(val_, torch.Tensor) and val_.dim() >= 2:
-                size_ = max(size_, val_.shape[1])
-                size_ = min(size_, 32768) 
+        def heuristic(node):
+            if "val" in node.meta:
+                if isinstance(node.meta["val"], torch.Tensor) and node.meta["val"].dim() >= 2:
+                    return node.meta["val"].shape[1] >= 4096
+            return False
 
         if min_cut_options.ban_if_not_in_allowlist:
             if not op_types.is_recomputable(node):
                 return False
 
         if min_cut_options.ban_if_materialized_backward and is_materialized_backwards(node):
-            if size_ > 4096:
+            if heuristic(node):
                 return False
             return True
 
