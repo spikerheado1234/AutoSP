@@ -1094,6 +1094,12 @@ def solve_min_cut(
         if node.dist_from_bw < 1000 and node.dist_from_bw > config.max_dist_from_bw:
             return False
 
+        if min_cut_options.ban_if_reduction:
+            input_tensors_size = sum(
+                _size_of(i) for i in node.args if isinstance(i, fx.Node)
+            )
+            output_size = _size_of(node)
+            return output_size * 4 < input_tensors_size
         return False
 
 
