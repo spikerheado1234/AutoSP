@@ -1075,24 +1075,19 @@ def solve_min_cut(
         if get_aten_target(node) in must_save_set:
             return True
 
-        size_ = 512
-        if "val" in node.meta:
-            val_ = node.meta["val"]
-            if isinstance(val_, torch.Tensor) and val_.dim() >= 2:
-                size_ = hint_int(val_.shape[1], fallback=512)
-                size_ = min(size_, 32768) 
+        def heuristic(node):
+            if "val" in node.meta:
+                if isinstance(node.meta["val"], torch.Tensor) and node.meta["val"].dim() >= 2:
+                    return node.meta["val"].shape[1] >= 4096
+            return False
 
-        print(f"{node.target}: {size_} =========== ", flush=True)
-        
         if min_cut_options.ban_if_not_in_allowlist:
             if not op_types.is_recomputable(node):
                 return False
 
         if min_cut_options.ban_if_materialized_backward and is_materialized_backwards(node):
-            if size_ > 4096:
-                log.info("allowing recomputation despite backward materialization for long sequence attention: %s", node)
+            if heuristic(node):
                 return False
-            log.info("materialized backwards: %s %s", node, tuple(node.users))
             return True
 
         if node.dist_from_bw < 1000 and node.dist_from_bw > config.max_dist_from_bw:
@@ -1103,12 +1098,9 @@ def solve_min_cut(
                 _size_of(i) for i in node.args if isinstance(i, fx.Node)
             )
             output_size = _size_of(node)
-            
-            reduction_threshold = 4 if size_ <= 1024 else 8
-            if output_size * reduction_threshold < input_tensors_size:
-                return True
-                
+            return output_size * 4 < input_tensors_size
         return False
+
 
     def is_materialized(node):
         if node.op == "placeholder":
