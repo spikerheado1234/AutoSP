@@ -3,6 +3,7 @@
 
 # DeepSpeed Team
 
+import pdb
 import torch
 
 try:
@@ -269,6 +270,7 @@ def patch_compile_fx(gm, example_inputs, options=None):
     # modify the graph
     for node in gm.graph.nodes:
         # constant
+        #pdb.set_trace() ## -> TRACE.
         S_partitioned = S // World_Size
         if "causal_mask" in node.name:
             arg_idx = 0

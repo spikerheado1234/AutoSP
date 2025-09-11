@@ -352,11 +352,6 @@ def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debu
         
         def make_bw_graph(gm, sample_inputs):
             return gm
-        
-        if backend == "eager":
-            aot_mod = aot_module_simplified(gm, real_inputs, fw_compiler=make_fw_graph, bw_compiler=make_bw_graph)
-            return torch._dynamo.optimize(**compile_kwargs)(aot_mod)
-        elif backend == "inductor":
-            patch_compile_fx(gm, real_inputs)
-            return torch._inductor.compile(gm, real_inputs)
+        patch_compile_fx(gm, real_inputs)
+        return torch._inductor.compile(gm, real_inputs)
     return backend_fn
