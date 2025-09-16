@@ -408,10 +408,6 @@ class DistributedAttention(torch.nn.Module):
         k = key.permute(0, 2, 1, 3).contiguous()
         v = value.permute(0, 2, 1, 3).contiguous()
 
-        torch.save(q, f"ulyssess_tensors/query_{rank}_before.pt")
-        torch.save(k, f"ulyssess_tensors/key_{rank}_before.pt")
-        torch.save(v, f"ulyssess_tensors/value_{rank}_before.pt")
-
         self.layer_sync(query)
         query_layer = _SeqAllToAll.apply(self.spg, query, self.scatter_idx, self.gather_idx, batch_dim_idx, None,
                                          self.overlap_handles, 'q')
@@ -427,10 +423,6 @@ class DistributedAttention(torch.nn.Module):
         query_layer = query_layer.permute(0, 2, 1, 3).contiguous()
         key_layer = key_layer.permute(0, 2, 1, 3).contiguous()
         value_layer = value_layer.permute(0, 2, 1, 3).contiguous()
-
-        torch.save(query_layer, f"ulyssess_tensors/query_{rank}_after.pt")
-        torch.save(key_layer, f"ulyssess_tensors/key_{rank}_after.pt")
-        torch.save(value_layer, f"ulyssess_tensors/value_{rank}_after.pt")
 
         if self.sp_overlap_comm:
             # Register a hook to synchronize dq and dk after the all-to-all
@@ -451,14 +443,12 @@ class DistributedAttention(torch.nn.Module):
 
         context_layer = self.local_attn(query_layer, key_layer, value_layer, *args, **kwargs)
 
-        torch.save(context_layer, f"ulyssess_tensors/out_{rank}_before.pt")
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous() # b, s, n, h
 
         output = _SeqAllToAll.apply(self.spg, context_layer, self.gather_idx, self.scatter_idx, batch_dim_idx,
                                     self.sp_stream, self.overlap_handles, 'o')
 
         output = output.permute(0, 2, 1, 3).contiguous()
-        torch.save(output, f"ulyssess_tensors/out_{rank}_after.pt") # b, n, s, h
 
         #out e.g., [s/p::h]
         return output

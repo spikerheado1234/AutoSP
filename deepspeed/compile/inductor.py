@@ -286,7 +286,7 @@ def patch_compile_fx(gm, example_inputs, options=None):
                 new_arg = gm.graph.create_node(
                     op=old_arg.op,
                     target=old_arg.target,
-                    args=(start, end),
+                    args=(0, S_partitioned),
                     kwargs=old_arg.kwargs,
                     name=None
                 )
