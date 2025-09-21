@@ -226,6 +226,10 @@ def register_custom_ops():
 BS_Shape = None
 NH_Shape = None
 World_Size = None
+B = None
+S = None
+N = None
+H = None
 
 def patch_compile_fx(gm, example_inputs, options=None):
     World_Size = dist.get_world_size() if dist.is_initialized() else 1
@@ -234,20 +238,22 @@ def patch_compile_fx(gm, example_inputs, options=None):
 
     # get seq length and partitioned start, end
     global BS_Shape
+    global B, S
     if BS_Shape is None:
         batch_size, seq_length = example_inputs[0].shape
         BS_Shape = (batch_size, seq_length * World_Size)
-    B, S = BS_Shape # S here is full sequence
+        B, S = BS_Shape 
     
     # grab N, H info    
     global NH_Shape
+    global N, H
     if NH_Shape is None:
         for node in gm.graph.nodes:
             if node.name == "attn_output":
                 _, num_heads, _, head_dim = node.args[0].meta['example_value'].shape
                 NH_Shape = (num_heads, head_dim)
                 break
-    N, H = NH_Shape
+        N, H = NH_Shape
     
     # replace seq to partitioned_seq
     def replace_constant_in_args(obj, old_value, new_value):
@@ -286,7 +292,7 @@ def patch_compile_fx(gm, example_inputs, options=None):
                 new_arg = gm.graph.create_node(
                     op=old_arg.op,
                     target=old_arg.target,
-                    args=(0, S_partitioned),
+                    args=(start, end),
                     kwargs=old_arg.kwargs,
                     name=None
                 )
@@ -358,7 +364,7 @@ def all_to_all_out(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, w
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=dist.group.WORLD)
     output = output.permute(1, 0, 2, 3, 4).contiguous() 
-    output = output.reshape(B, N, S // world_size, H).contiguous()
+    output = output.reshape(B, N, S // world_size, H).contiguous()  
     return output
 @torch.library.register_fake("ulysses::all_to_all_out")
 def _(input_tensor, B, S, N, H, world_size):

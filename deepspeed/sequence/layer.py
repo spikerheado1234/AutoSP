@@ -448,7 +448,6 @@ class DistributedAttention(torch.nn.Module):
         output = _SeqAllToAll.apply(self.spg, context_layer, self.gather_idx, self.scatter_idx, batch_dim_idx,
                                     self.sp_stream, self.overlap_handles, 'o')
 
-        output = output.permute(0, 2, 1, 3).contiguous()
 
         #out e.g., [s/p::h]
         return output
