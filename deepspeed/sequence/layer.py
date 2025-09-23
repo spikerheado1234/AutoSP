@@ -441,7 +441,7 @@ class DistributedAttention(torch.nn.Module):
             query_layer = apply_rotary_pos_emb(query_layer, pos_emb_cos, pos_emb_sin)
             key_layer = apply_rotary_pos_emb(key_layer, pos_emb_cos, pos_emb_sin)
 
-        context_layer = self.local_attn(query_layer, key_layer, value_layer, *args, **kwargs)
+        context_layer = self.local_attn(query_layer, key_layer, value_layer, enable_gqa=True, *args, **kwargs)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous() # b, s, n, h
 
