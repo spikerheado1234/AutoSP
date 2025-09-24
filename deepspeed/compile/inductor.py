@@ -248,7 +248,7 @@ def patch_compile_fx(gm, example_inputs, options=None):
 
 
     sp_size = 2
-    rank = dist.get_rank() % 2
+    rank = dist.get_rank() % sp_size
     register_groups([[0,1], [2,3]])
     group_id = (dist.get_rank() // sp_size)  # 0 or 1
 
