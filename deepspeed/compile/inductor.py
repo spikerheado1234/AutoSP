@@ -29,6 +29,19 @@ import torch.distributed as dist
 from torch.distributed._functional_collectives import all_to_all_inplace
 from torch.fx.node import Node
 
+import torch.distributed as dist
+
+GROUP_REGISTRY = {}  # int -> dist.ProcessGroup
+
+def register_groups(groups):
+    """groups: List[List[int]], e.g. [[0,1],[2,3]]"""
+    for gid, ranks in enumerate(groups):
+        if gid not in GROUP_REGISTRY:
+            GROUP_REGISTRY[gid] = dist.new_group(ranks)
+
+def get_group(gid: int):
+    return GROUP_REGISTRY[gid] if gid is not None else dist.group.WORLD
+
 
 def patch_compiler(original_compiler, dc_compiler, z3_partition: bool, graph_id, graph_param_manager, bwd: bool):
 
@@ -225,23 +238,28 @@ def register_custom_ops():
 
 BS_Shape = None
 NH_Shape = None
-World_Size = None
+sp_size = 2
 B = None
 S = None
 N = None
 H = None
 
 def patch_compile_fx(gm, example_inputs, options=None):
-    World_Size = dist.get_world_size() if dist.is_initialized() else 1
-    world_size = World_Size
-    rank = dist.get_rank()
+
+
+    sp_size = 2
+    rank = dist.get_rank() % 2
+
+    register_groups([[0,1], [2,3]])
+
+    group_id = (dist.get_rank() // sp_size)  # 0 or 1
 
     # get seq length and partitioned start, end
     global BS_Shape
     global B, S
     if BS_Shape is None:
         batch_size, seq_length = example_inputs[0].shape
-        BS_Shape = (batch_size, seq_length * World_Size)
+        BS_Shape = (batch_size, seq_length * sp_size)
         B, S = BS_Shape 
     
     # grab N, H info    
@@ -275,7 +293,7 @@ def patch_compile_fx(gm, example_inputs, options=None):
     # modify the graph
     for node in gm.graph.nodes:
         # constant
-        S_partitioned = S // World_Size
+        S_partitioned = S // sp_size
         if "causal_mask" in node.name:
             arg_idx = 0
             for arg in node.args:
@@ -314,73 +332,77 @@ def patch_compile_fx(gm, example_inputs, options=None):
             qkv = list(node.args[:3])
             for i, old_arg in enumerate(qkv):
                 with gm.graph.inserting_after(old_arg):
-                    new_arg = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_qkv.default, (old_arg, B, S, N, H, world_size, ), {}, name=None)
+                    new_arg = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_qkv.default, (old_arg, B, S, N, H, sp_size, group_id, ), {}, name=None)
                     old_arg.replace_all_uses_with(new_arg)
-                    new_arg.args = (old_arg, B, S, N, H, world_size, )
+                    new_arg.args = (old_arg, B, S, N, H, sp_size, group_id, )
             with gm.graph.inserting_after(node):
-                new_node = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_out.default, (node, B, S, N, H, world_size, ), {}, name=None)
+                new_node = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_out.default, (node, B, S, N, H, sp_size, group_id, ), {}, name=None)
                 node.replace_all_uses_with(new_node)
-                new_node.args = (node, B, S, N, H, world_size, )
+                new_node.args = (node, B, S, N, H, sp_size, group_id, )
     gm.recompile()
     return original_compile(gm, example_inputs, options)
 
 @torch.library.custom_op("ulysses::all_to_all_qkv", mutates_args=())
-def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int) -> torch.Tensor:
+def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, sp_size: int, group_id: int) -> torch.Tensor:
     # b, n, s, h
+    group_ = get_group(group_id)
     rank = dist.get_rank()
-    input_t = input_tensor.reshape([B, world_size, N // world_size, S // world_size, H]).contiguous()
+    input_t = input_tensor.reshape([B, sp_size, N // sp_size, S // sp_size, H]).contiguous()
     input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
     output = torch.empty_like(input_t)
-    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    all_to_all_inplace(output, input_t, group=group_)
     output = output.permute(1, 2, 0, 3, 4).contiguous()  
-    output = output.reshape(B, N // world_size, S, H).contiguous()
+    output = output.reshape(B, N // sp_size, S, H).contiguous()
     return output
 @torch.library.register_fake("ulysses::all_to_all_qkv")
-def _(input_tensor, B, S, N, H, world_size):
-    fake_tensor = input_tensor.new_empty((B, N // world_size, S, H))
+def _(input_tensor, B, S, N, H, sp_size, group_id):
+    fake_tensor = input_tensor.new_empty((B, N // sp_size, S, H))
     return fake_tensor
 def all_to_all_qkv_setup_context(ctx, inputs, output) -> torch.Tensor:
-    input_tensor, B, S, N, H, world_size = inputs
-    ctx.saved_data = (B, S, N, H, world_size)
+    input_tensor, B, S, N, H, sp_size, group_id = inputs
+    ctx.saved_data = (B, S, N, H, sp_size, group_id)
 def all_to_all_qkv_backward(ctx, grad):
-    B, S, N, H, world_size = ctx.saved_data
-    input_t = grad.reshape([B, N // world_size, world_size, S // world_size, H])
+    B, S, N, H, sp_size, group_id = ctx.saved_data
+    group_ = get_group(group_id)
+    input_t = grad.reshape([B, N // sp_size, sp_size, S // sp_size, H])
     input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
     output = torch.empty_like(input_t)
-    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    all_to_all_inplace(output, input_t, group=group_)
     output = output.permute(1, 0, 2, 3, 4).contiguous() 
-    output = output.reshape(B, N, S // world_size, H)
+    output = output.reshape(B, N, S // sp_size, H)
     return (output, None, None, None, None, None, None)
 torch.library.register_autograd(
     "ulysses::all_to_all_qkv", all_to_all_qkv_backward, setup_context=all_to_all_qkv_setup_context
 )
 
 @torch.library.custom_op("ulysses::all_to_all_out", mutates_args=())
-def all_to_all_out(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int) -> torch.Tensor:
+def all_to_all_out(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, sp_size: int, group_id: int) -> torch.Tensor:
     # b, n, s, h
     rank = dist.get_rank()
-    input_t = input_tensor.reshape([B, N // world_size, world_size, S // world_size, H]).contiguous()
+    group_ = get_group(group_id)
+    input_t = input_tensor.reshape([B, N // sp_size, sp_size, S // sp_size, H]).contiguous()
     input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
     output = torch.empty_like(input_t)
-    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    all_to_all_inplace(output, input_t, group=group_)
     output = output.permute(1, 0, 2, 3, 4).contiguous() 
-    output = output.reshape(B, N, S // world_size, H).contiguous()  
+    output = output.reshape(B, N, S // sp_size, H).contiguous()  
     return output
 @torch.library.register_fake("ulysses::all_to_all_out")
-def _(input_tensor, B, S, N, H, world_size):
-    fake_tensor = input_tensor.new_empty((B, N, S // world_size, H))
+def _(input_tensor, B, S, N, H, sp_size, group_id):
+    fake_tensor = input_tensor.new_empty((B, N, S // sp_size, H))
     return fake_tensor
 def all_to_all_out_setup_context(ctx, inputs, output) -> torch.Tensor:
-    input_tensor, B, S, N, H, world_size = inputs
-    ctx.saved_data = (B, S, N, H, world_size)
+    input_tensor, B, S, N, H, sp_size, group_id = inputs
+    ctx.saved_data = (B, S, N, H, sp_size, group_id)
 def all_to_all_out_backward(ctx, grad):
-    B, S, N, H, world_size = ctx.saved_data
-    input_t = grad.reshape([B, world_size, N // world_size, S // world_size, H]).contiguous()
+    B, S, N, H, sp_size, group_id = ctx.saved_data
+    group_ = get_group(group_id)
+    input_t = grad.reshape([B, sp_size, N // sp_size, S // sp_size, H]).contiguous()
     input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
     output = torch.empty_like(input_t)
-    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    all_to_all_inplace(output, input_t, group=group_)
     output = output.permute(1, 2, 0, 3, 4).contiguous()  
-    output = output.reshape(B, N // world_size, S, H).contiguous() 
+    output = output.reshape(B, N // sp_size, S, H).contiguous() 
     return (output, None, None, None, None, None, None)
 torch.library.register_autograd(
     "ulysses::all_to_all_out", all_to_all_out_backward, setup_context=all_to_all_out_setup_context
