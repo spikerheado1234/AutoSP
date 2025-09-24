@@ -250,7 +250,7 @@ def patch_compile_fx(gm, example_inputs, options=None):
     sp_size = 2
     rank = dist.get_rank() % 2
 
-    register_groups([[0,1], [2,3]])
+    register_groups([[0,1], [2,3], [4,5], [6,7]])
 
     group_id = (dist.get_rank() // sp_size)  # 0 or 1
 
@@ -348,6 +348,7 @@ def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, s
     group_ = get_group(group_id)
     rank = dist.get_rank()
     input_t = input_tensor.reshape([B, sp_size, N // sp_size, S // sp_size, H]).contiguous()
+    print(f"input_t: {input_t.shape}", flush=True)
     input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=group_)
