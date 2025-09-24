@@ -247,9 +247,9 @@ H = None
 def patch_compile_fx(gm, example_inputs, options=None):
 
 
-    sp_size = 2
+    sp_size = 4
     rank = dist.get_rank() % sp_size
-    register_groups([[0,1], [2,3]])
+    register_groups([[0,1,2,3], [4,5,6,7]])
     group_id = (dist.get_rank() // sp_size)  # 0 or 1
 
     # get seq length and partitioned start, end
