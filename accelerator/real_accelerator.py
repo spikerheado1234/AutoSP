@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     dsa2 = None
 
-SUPPORTED_ACCELERATOR_LIST = ['cuda', 'cpu', 'xpu', 'xpu.external', 'npu', 'mps', 'hpu', 'mlu']
+SUPPORTED_ACCELERATOR_LIST = ['cuda', 'cpu', 'xpu', 'xpu.external', 'npu', 'mps', 'hpu', 'mlu', 'sdaa']
 
 ds_accelerator = None
 
@@ -80,6 +80,12 @@ def get_accelerator():
             except ImportError as e:
                 raise ValueError(f"NPU_Accelerator requires torch_npu, which is not installed on this system.")
             pass
+        elif accelerator_name == "sdaa":
+            try:
+                import torch_sdaa  # noqa: F401 # type: ignore
+            except ImportError as e:
+                raise ValueError(f"SDAA_Accelerator requires torch_sdaa, which is not installed on this system.")
+            pass
         elif accelerator_name == "mps":
             try:
                 import torch.mps
@@ -132,9 +138,31 @@ def get_accelerator():
                 pass
         if accelerator_name is None:
             try:
+                import torch
+
+                # torch.xpu will be supported in upstream pytorch-2.8.
+                # Currently we can run on xpu device only using pytorch,
+                # also reserve the old path using ipex when the torch version is old.
+                if hasattr(torch, 'xpu'):
+                    if torch.cuda.device_count() == 0:  #ignore-cuda
+                        if torch.xpu.device_count() > 0 and torch.xpu.is_available():
+                            accelerator_name = "xpu"
+                else:
+                    pass
+            except ImportError as e:
+                pass
+        if accelerator_name is None:
+            try:
                 import torch_npu  # noqa: F401,F811 # type: ignore
 
                 accelerator_name = "npu"
+            except ImportError as e:
+                pass
+        if accelerator_name is None:
+            try:
+                import torch_sdaa  # noqa: F401,F811 # type: ignore
+
+                accelerator_name = "sdaa"
             except ImportError as e:
                 pass
         if accelerator_name is None:
@@ -169,7 +197,7 @@ def get_accelerator():
                 # ensuring that we are free from CUDA initialization errors.
                 # While "torch.cuda.device_count() > 0" check ensures that       #ignore-cuda
                 # we won't try to do any CUDA calls when no device is available
-                # For reference: https://github.com/microsoft/DeepSpeed/pull/6810
+                # For reference: https://github.com/deepspeedai/DeepSpeed/pull/6810
                 if torch.cuda.device_count() > 0 and torch.cuda.is_available():  #ignore-cuda
                     accelerator_name = "cuda"
             except (RuntimeError, ImportError) as e:
@@ -205,6 +233,10 @@ def get_accelerator():
         from .npu_accelerator import NPU_Accelerator
 
         ds_accelerator = NPU_Accelerator()
+    elif accelerator_name == "sdaa":
+        from .sdaa_accelerator import SDAA_Accelerator
+
+        ds_accelerator = SDAA_Accelerator()
     elif accelerator_name == "mps":
         from .mps_accelerator import MPS_Accelerator
 

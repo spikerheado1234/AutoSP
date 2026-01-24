@@ -78,9 +78,9 @@ class DeepSpeedHybridEngine(DeepSpeedEngine):
     def new_inference_container(self, orig_layer, policy_cls, layer_id):
         policy = policy_cls(orig_layer, inference=True)
 
-        if self._config.fp16_enabled:
+        if self._config.float16_config.enabled:
             inference_dtype = torch.float16
-        elif self._config.bfloat16_enabled:
+        elif self._config.bfloat16_config.enabled:
             inference_dtype = torch.bfloat16
         else:
             inference_dtype = torch.float32
@@ -290,8 +290,13 @@ class DeepSpeedHybridEngine(DeepSpeedEngine):
 
                     layer_id += 1
                 else:
-                    self._other_layers.append(self.inference_policies[child.__class__][0](
-                        weight=child.weight, bias=child.bias if hasattr(child, 'bias') else None))
+                    if self.inference_policies[child.__class__][0] == LinearLayer:
+                        self._other_layers.append(self.inference_policies[child.__class__][0](module=child,
+                                                                                              mp_group=None,
+                                                                                              skip_partition=True))
+                    else:
+                        self._other_layers.append(self.inference_policies[child.__class__][0](
+                            weight=child.weight, bias=child.bias if hasattr(child, 'bias') else None))
                     self._orig_modules_others.append(child)
                     self._orig_fwds_others.append(child.forward)
             else:

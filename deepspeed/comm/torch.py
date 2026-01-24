@@ -206,6 +206,10 @@ class TorchBackend(Backend):
             return torch.distributed.broadcast(tensor=tensor, src=src, group=group, async_op=async_op)
 
     @disable_compiler_collective
+    def broadcast_object_list(self, object_list, src, group=None, device=None):
+        return torch.distributed.broadcast_object_list(object_list=object_list, src=src, group=group, device=device)
+
+    @disable_compiler_collective
     def all_gather(self, tensor_list, tensor, group=None, async_op=False):
         if DS_COMM_ALL_GATHER_OFF:
             if int(os.getenv('RANK', '0')) == 0:
@@ -263,6 +267,10 @@ class TorchBackend(Backend):
                 return reqs[-1]
             else:
                 reqs[-1].wait()
+
+    @disable_compiler_collective
+    def all_gather_object(self, object_list, obj, group=None):
+        return torch.distributed.all_gather_object(object_list=object_list, obj=obj, group=group)
 
     @disable_compiler_collective
     def reduce_scatter_tensor(self, output_tensor, input_tensor, op=ReduceOp.SUM, group=None, async_op=False):
@@ -407,8 +415,8 @@ class TorchBackend(Backend):
 
     def enable_symm_mem_for_group(self, group_name):
         if not required_torch_version(min_version=2.5):
-            raise RuntimeError(f"Current torch version does not have enable_symm_mem_for_group"
-                               f"api (torch.__version__: {torch.__version__})")
+            raise RuntimeError(f"Torch version must be 2.5 or higher to use symmetric memory. "
+                               f"Current version: {torch.__version__}")
         from torch.distributed._symmetric_memory import enable_symm_mem_for_group
         return enable_symm_mem_for_group(group_name)
 

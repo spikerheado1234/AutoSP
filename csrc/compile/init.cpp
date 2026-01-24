@@ -12,13 +12,15 @@ TORCH_LIBRARY(dc, m)
     m.def("allgather_param(Tensor a, int graph_id, int id) -> Tensor");
     m.def("prefetch_params_fused(int graph_id, Tensor[] params, int[] ids) -> ()");
     m.def("wait_allgather(Tensor a, int graph_id, int id) -> Tensor");
-    m.def("release_param(Tensor a, int graph_id, int id) -> Tensor");
+    m.def("release_param(Tensor a, int graph_id, int id, int n_users) -> Tensor");
     m.def("reduce_grad(Tensor a, int graph_id, int id) -> Tensor");
     m.def("free_tensors(Tensor[] a) -> ()");
     m.def("offload_tensor(Tensor a, int id, int id) -> Tensor");
     m.def("reload_tensor(Tensor a, int id, int id) -> Tensor");
     m.def("wait_offload(Tensor a, int id, int id) -> Tensor");
     m.def("wait_reload(Tensor a, int id, int id) -> Tensor");
+    m.def("offload_parameter(Tensor a, int id, int id) -> ()");
+    m.def("reload_parameter(Tensor a, int id, int id) -> ()");
 
     m.def("test_call(Tensor a) -> Tensor");
 }
@@ -35,6 +37,8 @@ TORCH_LIBRARY_IMPL(dc, CPU, m)
     m.impl("reload_tensor", &dc::reload_tensor);
     m.impl("wait_offload", &dc::wait_offload);
     m.impl("wait_reload", &dc::wait_reload);
+    m.impl("offload_parameter", &dc::offload_parameter);
+    m.impl("reload_parameter", &dc::reload_parameter);
 
     m.impl("test_call", &dc::test_call);
 }
@@ -51,6 +55,8 @@ TORCH_LIBRARY_IMPL(dc, CUDA, m)
     m.impl("reload_tensor", &dc::reload_tensor);
     m.impl("wait_offload", &dc::wait_offload);
     m.impl("wait_reload", &dc::wait_reload);
+    m.impl("offload_parameter", &dc::offload_parameter);
+    m.impl("reload_parameter", &dc::reload_parameter);
 
     m.impl("test_call", &dc::test_call);
 }
@@ -63,6 +69,8 @@ TORCH_LIBRARY_IMPL(dc, Meta, m)
     m.impl("wait_allgather", &dc::wait_allgather_meta);
     m.impl("reduce_grad", &dc::reduce_grad_meta);
     m.impl("free_tensors", &dc::free_tensors_meta);
+    m.impl("reload_parameter", &dc::reload_parameter_meta);
+    m.impl("offload_parameter", &dc::offload_parameter_meta);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)

@@ -4,16 +4,14 @@
 # DeepSpeed Team
 
 import torch
-from torch._dynamo.variables.builder import wrap_to_fake_tensor_and_record
-from torch._subclasses import FakeTensorMode
 
-fake_legacy = True
 try:
-    # torch==v2.4
-    from torch.fx.experimental.proxy_tensor import maybe_disable_fake_tensor_mode as unset_fake_temporarily
-except ImportError:
+    from torch._subclasses import FakeTensorMode
     from torch._subclasses.fake_tensor import unset_fake_temporarily
-    fake_legacy = False
+    from torch._dynamo.variables.builder import wrap_to_fake_tensor_and_record
+except ImportError:
+    # Unsupported torch version
+    pass
 
 
 def wrap_if_ds_param(t):
@@ -53,28 +51,3 @@ def patch_fake_tensor():
             return original_from_tensor(self, wrap_if_ds_param(t), *args, **kwargs)
 
     FakeTensorMode.from_tensor = from_tensor_wrapper
-
-    if fake_legacy:
-        from torch._subclasses.fake_tensor import FakeCopyMode
-
-        class Z3FakeCopyMode(FakeCopyMode):
-
-            def __init__(self, fake_mode):
-                super().__init__(fake_mode)
-                self.param_map = {}
-
-            def __torch_function__(self, func, types, args=(), kwargs=None):
-                if func == torch._C.TensorBase.clone:
-                    v = args[0]
-                    if args[0] in self.param_map:
-                        v = self.param_map[args[0]]
-                    return func(self.fake_mode.from_tensor(v, static_shapes=True), **kwargs)
-
-                ret = super().__torch_function__(func, types, args, kwargs)
-
-                if len(args) == 1 and isinstance(args[0], torch.nn.Parameter):
-                    self.param_map[ret] = args[0]
-
-                return ret
-
-        torch._subclasses.fake_tensor.FakeCopyMode = Z3FakeCopyMode
