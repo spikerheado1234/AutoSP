@@ -13,10 +13,10 @@ from torch._functorch._aot_autograd.schemas import (
     OutputType,
     SubclassCreationMeta,
 )
-from torch._functorch._aot_autograd.subclass_utils import (
-    get_types_for_subclass,
-    unwrap_tensor_subclasses,
-)
+# from torch._functorch._aot_autograd.subclass_utils import (
+#     get_types_for_subclass,
+#     unwrap_tensor_subclasses,
+# )
 from torch._functorch._aot_autograd.runtime_wrappers import AOTDispatchAutograd
 from torch._subclasses import FakeTensor
 
