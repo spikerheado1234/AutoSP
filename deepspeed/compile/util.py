@@ -80,7 +80,7 @@ def log_rank0_graph(gm: GraphModule, enable: bool = False):
             for node in gm.graph.nodes:
                 f.write(f"{node.op} {node.name} : {node.target}\n")
                 if node.meta:
-                    f.write(f"    meta[val] = {node.meta["val"]} \n")
+                    f.write(f"    meta[val] = {node.meta['val']} \n")
     
 def get_no_copy_ops():
     # Need to compile custom ops

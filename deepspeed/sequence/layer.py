@@ -258,7 +258,6 @@ class _SeqAllToAll(torch.autograd.Function):
                 handle=None,
                 type=None,
                 is_fwd=True) -> Tensor:
-        print("========================REACH0======================\n", flush=True)
         ctx.group = group
         ctx.scatter_idx = scatter_idx
         ctx.gather_idx = gather_idx
@@ -407,9 +406,10 @@ class DistributedAttention(torch.nn.Module):
         #     query_layer = apply_rotary_pos_emb(query_layer, pos_emb_cos, pos_emb_sin)
         #     key_layer = apply_rotary_pos_emb(key_layer, pos_emb_cos, pos_emb_sin)
 
-        attn_output, attn_weights = self.local_attn(query_layer, key_layer, value_layer, *args, **kwargs)
+        attn_output = self.local_attn(query_layer, key_layer, value_layer, *args, **kwargs)
         output = _SeqAllToAll.apply(self.spg, attn_output, self.gather_idx, self.scatter_idx, batch_dim_idx,
                                     self.sp_stream, self.overlap_handles, 'o')
 
         #out e.g., [s/p::h]
+        attn_weights = None
         return (output, attn_weights)
