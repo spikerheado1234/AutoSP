@@ -34,7 +34,6 @@ export NCCL_P2P_LEVEL=NVL
 
 export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH
 export PATH=/usr/local/cuda-12.8/bin:$PATH
-export LD_LIBRARY_PATH=/scratch/bcjw/ndani/minikv/lib:$LD_LIBRARY_PATH
 
 export HF_DATASETS_CACHE="/u/$USER/.cache"
 export HF_HOME=$HF_DATASETS_CACHE
