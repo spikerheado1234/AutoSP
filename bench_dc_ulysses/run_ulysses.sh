@@ -5,8 +5,8 @@ COMPILE=${2:-eager}
 LAYER_COUNT=${3:-""}
 EXP_NAME=${4:-""}
 
-if [[ "$COMPILE" != "eager" && "$COMPILE" != "compile" && "$COMPILE" != "deepcompile" ]]; then
-    echo "Invalid mode: $COMPILE. Choose from eager, compile, deepcompile."
+if [[ "$COMPILE" != "eager" && "$COMPILE" != "compile" && "$COMPILE" != "deepcompile" && "$COMPILE" != "ringattn" ]]; then
+    echo "Invalid mode: $COMPILE. Choose from eager, compile, deepcompile, ringattn."
     exit 1
 fi
 
