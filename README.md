@@ -51,6 +51,18 @@ pip install \
 pip install --no-build-isolation -e .
 ```
 
+### 6. Install AutoSP
+
+```bash
+pip install --no-build-isolation -e .
+```
+
+### 7. Copy partitioners.py to Torch Installation
+
+Copy the custom `need_to_copy_paste/partitioners.py` from the repository to your conda environment's torch installation.
+
+This enables custom partitioning support for the benchmarking scripts.
+
 
 ## Benchmarking
 
