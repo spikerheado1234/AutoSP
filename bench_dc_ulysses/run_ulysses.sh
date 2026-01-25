@@ -22,8 +22,6 @@ PROFILE_DIR=${PROFILE_DIR:-profiles}
 mkdir -p ${PROFILE_DIR}
 PROFILE_OPTS="--profile_dir ${PROFILE_DIR}"
 
-export NCCL_DEBUG=WARN
-
 COMPILE_OPTS="--compile ${COMPILE}"
 CONFIG_FILE="configs/torchcompile_config.yaml"
 if [ "${COMPILE}" == "deepcompile" ]; then

@@ -1,6 +1,5 @@
 import os
 import argparse
-import time
 from datetime import datetime
 from contextlib import nullcontext
 from typing import List
@@ -19,6 +18,8 @@ import random
 import numpy as np
 import csv
 import time
+
+from distributed_attention import ulysses_attention_forward
 
 torch.set_float32_matmul_precision("high")
 
@@ -40,7 +41,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--num_epochs", type=int, default=1)
+    parser.add_argument("--num_epochs", type=int, default=5)
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -80,28 +81,28 @@ def main():
         print("Loading model and tokenizer...")
 
     model_name = args.model_name
+    if args.compile == "deepcompile":
+        attention_backend = "sdpa"
+    else:
+        from transformers.models.llama import modeling_llama
+        attention_backend = "ulyssess"
+        modeling_llama.ALL_ATTENTION_FUNCTIONS["ulyssess"] = ulysses_attention_forward
 
     if args.num_layers is not None:
         model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         print(f"num_hidden_layers: {model_config.num_hidden_layers} -> {args.num_layers}")
         model_config.num_hidden_layers = args.num_layers
-        # update attention backend
-        if args.compile == "deepcompile":
-            model_config._attn_implementation = "sdpa"
-        elif args.compile == "compile" or args.compile == "eager":
-            model_config._attn_implementation = "ulysses"
-        else:
-            model_config._attn_implementation = "sdpa"
-
+        model_config._attn_implementation = attention_backend
         model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
     else:
-        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        model_config._attn_implementation = attention_backend
+        model = AutoModelForCausalLM.from_pretrained(model_name, config=model_config, trust_remote_code=True)
 
     if args.activation_checkpointing:
         model.gradient_checkpointing_enable()
 
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
     # Load dataset
@@ -345,6 +346,11 @@ if __name__ == "__main__":
     torch._dynamo.config.optimize_ddp = False
     try:
         main()
+    except Exception as e:
+        import pdb
+        import traceback
+        traceback.print_exc()
+        pdb.post_mortem()
     finally:
         # Ensure distributed resources are cleaned up to avoid leaks/warnings
         if dist.is_available() and dist.is_initialized():
