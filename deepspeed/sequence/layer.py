@@ -411,5 +411,4 @@ class DistributedAttention(torch.nn.Module):
                                     self.sp_stream, self.overlap_handles, 'o')
 
         #out e.g., [s/p::h]
-        attn_weights = None
-        return (output, attn_weights)
+        return output
