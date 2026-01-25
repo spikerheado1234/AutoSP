@@ -145,7 +145,7 @@ def main():
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True
         model.compile(backend=args.backend)
-    elif args.compile == "compile":
+    elif args.compile == "compile" or args.compile == "ringattn":
         print(f"Running torch.compile with backend={args.backend}")
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True

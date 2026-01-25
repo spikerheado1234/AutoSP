@@ -502,7 +502,7 @@ def ring_attention_forward(
     q = query_states.transpose(1, 2).contiguous()
     k = key_states.transpose(1, 2).contiguous()
     v = value_states.transpose(1, 2).contiguous()
-    
+
     # Ring attention expects (batch, seq, heads, dim)
     # Call the ring flash attention function
     attn_output = ring_flash_attn_func(
