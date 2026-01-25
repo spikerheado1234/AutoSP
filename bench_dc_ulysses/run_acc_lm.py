@@ -20,6 +20,7 @@ import csv
 import time
 
 from distributed_attention import ulysses_attention_forward
+from ring_attention import ring_attention_forward
 
 torch.set_float32_matmul_precision("high")
 
@@ -84,9 +85,14 @@ def main():
     if args.compile == "deepcompile":
         attention_backend = "sdpa"
     else:
-        from transformers.models.llama import modeling_llama
-        attention_backend = "ulyssess"
-        modeling_llama.ALL_ATTENTION_FUNCTIONS["ulyssess"] = ulysses_attention_forward
+        if args.compile == "eager" or args.compile == "compile":
+            from transformers.models.llama import modeling_llama
+            attention_backend = "ulyssess"
+            modeling_llama.ALL_ATTENTION_FUNCTIONS["ulyssess"] = ulysses_attention_forward
+        elif args.compile == "ringattn":
+            from transformers.models.llama import modeling_llama
+            attention_backend = "ringattn"
+            modeling_llama.ALL_ATTENTION_FUNCTIONS["ringattn"] = ring_attention_forward 
 
     if args.num_layers is not None:
         model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
@@ -215,7 +221,7 @@ def main():
                 start = accelerator.process_index * args.seq_length // accelerator.num_processes
                 end = start + args.seq_length // accelerator.num_processes
                 
-                if args.compile == "compile" or args.compile == "eager":
+                if args.compile in ("compile", "eager", "ringattn"):
                     start = accelerator.process_index * args.seq_length // accelerator.num_processes
                     end = start + args.seq_length // accelerator.num_processes
                     input_ids = input_ids[:, start:end]
