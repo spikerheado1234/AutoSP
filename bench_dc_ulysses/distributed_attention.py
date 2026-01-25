@@ -58,7 +58,8 @@ def sdpa_wrapper(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=Tru
         attn_mask=None,  # Ignore the mask for distributed case
         dropout_p=dropout_p,
         is_causal=is_causal,
-        scale=scale
+        scale=scale,
+        enable_gqa=True
     )
     
     # Permute back from [b, n, s, h] to [b, s, n, h]
