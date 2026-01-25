@@ -33,7 +33,7 @@ git clone https://github.com/neeldani/bench_dc_ulysses.git
 
 Test the setup by running the script:
 ```bash
-bash run_ulysses.sh 6 [compile|deepcompile|eager]
+bash run_ulysses.sh 6 [compile|deepcompile|eager|ringattn]
 ```
 
 Here, 6 is the sequence length and is hardcoded because the input sequence inside run_acc_lm.py is hardcoded to easily verify the Q, K and V before and after the all-to-all. You may use pass `compile` to run compiled Ulysses (Ulysses with graph breaks) or `deepcompile` to run deepcompiled Ulysses (allwall inserted within the compiler pass)
