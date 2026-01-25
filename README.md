@@ -60,10 +60,11 @@ This enables custom partitioning support for the benchmarking scripts.
 
 ## Benchmarking
 
-See `bench_dc_ulysses/` directory for benchmarking scripts:
+See `bench_dc_ulysses/` directory for benchmarking scripts (update sample.slurm with the correct env and paths):
 
 ```bash
 cd bench_dc_ulysses
+source sample.slurm
 bash run_ulysses.sh {seq_len} {compile|eager|deepcompile} {num_layers}
 ```
 
