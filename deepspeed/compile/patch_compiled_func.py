@@ -197,7 +197,8 @@ Got grad_output types: {str(grad_output_types)}"""
 
     # Make the tangents contiguous. Note that we must do this after subclass desugaring
     # because inputs to inductor have to be contiguous
-    all_args = [(AOTDispatchAutograd._force_contiguous(t) if (tangents_start_idx <= i < tangents_end_idx) else t)
+    #all_args = [(AOTDispatchAutograd._force_contiguous(t) if (tangents_start_idx <= i < tangents_end_idx) else t)
+    all_args = [(t.contiguous() if (tangents_start_idx <= i < tangents_end_idx) else t)
                 for i, t in enumerate(all_args)]
 
     return all_args

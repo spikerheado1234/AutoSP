@@ -16,8 +16,26 @@ import torch.distributed as dist
 from .util import get_input_nodes
 from .graph_param import DSGraphParamManager
 from torch.fx.experimental.symbolic_shapes import ShapeEnv
+import torch._inductor as inductor_compile
+import os
+
+from torch.distributed._functional_collectives import all_to_all_inplace
+from torch.fx.node import Node
 
 original_create_aot_dispatcher_function = create_aot_dispatcher_function
+original_compile = inductor_compile.compile
+
+## Helper utils for ZeRo-1 support. ##
+GROUP_REGISTRY = {} # int -> dist.ProcessGroup
+
+def register_groups(groups):
+    """groups: List[List[int]], e.g. [[0,1],[2,3]]"""
+    for gid, ranks in enumerate(groups):
+        if gid not in GROUP_REGISTRY:
+            GROUP_REGISTRY[gid] = dist.new_group(ranks)
+
+def get_group(gid: int):
+    return GROUP_REGISTRY[gid] if gid is not None else dist.group.WORLD
 
 def patch_create_aot_dispatcher_function(graph_id: int, z3_partition: bool, make_fw_graph, make_bw_graph, real_inputs,
                                          param_indices, param_manager):
@@ -204,3 +222,187 @@ def register_custom_ops():
     if not hasattr(Scheduler, "is_dc_patched") or not Scheduler.is_dc_patched:
         Scheduler.is_dc_patched = True
         Scheduler.dead_node_elimination = lambda _: None
+
+BS_Shape = None
+NH_Shape = None
+sp_size = int(os.getenv('SP_SIZE'))
+B = None
+S = None
+N = None
+H = None
+
+GROUP_REGISTRY = {} # int -> dist.ProcessGroup
+
+def register_groups(groups):
+    """groups: List[List[int]], e.g. [[0,1],[2,3]]"""
+    for gid, ranks in enumerate(groups):
+        if gid not in GROUP_REGISTRY:
+            GROUP_REGISTRY[gid] = dist.new_group(ranks)
+
+def patch_compile_fx(gm, example_inputs, options=None):
+
+    rank = dist.get_rank() % sp_size
+
+    group_listing = []
+    offset = 0
+    for _ in range(int(os.getenv('DP_SIZE'))):
+        group_listing.append([i + offset for i in range(sp_size)])
+        offset += sp_size
+
+    register_groups(group_listing)
+
+    group_id = (dist.get_rank() // sp_size)  # 0 or 1
+
+    # get seq length and partitioned start, end
+    global BS_Shape
+    global B, S
+    if BS_Shape is None:
+        batch_size, seq_length = example_inputs[0].shape
+        BS_Shape = (batch_size, seq_length * sp_size)
+        B, S = BS_Shape 
+    
+    # grab N, H info    
+    global NH_Shape
+    global N, H
+    if NH_Shape is None:
+        for node in gm.graph.nodes:
+            if node.name == "attn_output":
+                _, num_heads, _, head_dim = node.args[0].meta['example_value'].shape
+                NH_Shape = (num_heads, head_dim)
+                break
+        if NH_Shape:
+            N, H = NH_Shape
+    
+    # replace seq to partitioned_seq
+    def replace_constant_in_args(obj, old_value, new_value):
+        if isinstance(obj, (list, tuple)):
+            return type(obj)(replace_constant_in_args(o, old_value, new_value) for o in obj)
+        elif isinstance(obj, dict):
+            return {k: replace_constant_in_args(v, old_value, new_value) for k, v in obj.items()}
+        elif isinstance(obj, slice):
+            return slice(
+                replace_constant_in_args(obj.start, old_value, new_value),
+                replace_constant_in_args(obj.stop, old_value, new_value),
+                replace_constant_in_args(obj.step, old_value, new_value)
+            )
+        elif obj == old_value:
+            return new_value
+        else:
+            return obj
+    # modify the graph
+    for node in gm.graph.nodes:
+        # constant
+        S_partitioned = S // sp_size
+        if "causal_mask" in node.name:
+            arg_idx = 0
+            for arg in node.args:
+                if not isinstance(arg, Node):
+                    new_arg = replace_constant_in_args(arg, S_partitioned, S)
+                    node.update_arg(arg_idx, new_arg)
+                arg_idx += 1
+         # position ids
+        if node.name == "position_ids":
+            old_arg = node.args[0]
+            start = rank * S_partitioned
+            end = (rank + 1) * S_partitioned
+            with gm.graph.inserting_before(node):
+                new_arg = gm.graph.create_node(
+                    op=old_arg.op,
+                    target=old_arg.target,
+                    args=(start, end),
+                    kwargs=old_arg.kwargs,
+                    name=None
+                )
+                node.replace_input_with(old_arg, new_arg)
+        # constant
+        if node.name == "reshape":
+            old_arg = node.args[0]
+            with gm.graph.inserting_before(node):
+                new_arg = gm.graph.create_node(
+                    op=old_arg.op,
+                    target=old_arg.target,
+                    args=(0, S),
+                    kwargs=old_arg.kwargs,
+                    name=None
+                )
+                node.replace_input_with(old_arg, new_arg) 
+        import torch.nn.functional as F
+        if node.target == F.scaled_dot_product_attention:
+            qkv = list(node.args[:3])
+            for i, old_arg in enumerate(qkv):
+                with gm.graph.inserting_after(old_arg):
+                    new_arg = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_qkv.default, (old_arg, B, S, N, H, sp_size, group_id, ), {}, name=None)
+                    old_arg.replace_all_uses_with(new_arg)
+                    new_arg.args = (old_arg, B, S, N, H, sp_size, group_id, )
+            with gm.graph.inserting_after(node):
+                new_node = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_out.default, (node, B, S, N, H, sp_size, group_id, ), {}, name=None)
+                node.replace_all_uses_with(new_node)
+                new_node.args = (node, B, S, N, H, sp_size, group_id, )
+    gm.recompile()
+    return original_compile(gm, example_inputs, options)
+
+@torch.library.custom_op("ulysses::all_to_all_qkv", mutates_args=())
+def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, sp_size: int, group_id: int) -> torch.Tensor:
+    # b, n, s, h
+    group_ = get_group(group_id)
+    rank = dist.get_rank()
+    input_t = input_tensor.reshape([B, sp_size, N // sp_size, S // sp_size, H]).contiguous()
+    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=group_)
+    output = output.permute(1, 2, 0, 3, 4).contiguous()  
+    output = output.reshape(B, N // sp_size, S, H).contiguous()
+    return output
+@torch.library.register_fake("ulysses::all_to_all_qkv")
+def _(input_tensor, B, S, N, H, sp_size, group_id):
+    fake_tensor = input_tensor.new_empty((B, N // sp_size, S, H))
+    return fake_tensor
+def all_to_all_qkv_setup_context(ctx, inputs, output) -> torch.Tensor:
+    input_tensor, B, S, N, H, sp_size, group_id = inputs
+    ctx.saved_data = (B, S, N, H, sp_size, group_id)
+def all_to_all_qkv_backward(ctx, grad):
+    B, S, N, H, sp_size, group_id = ctx.saved_data
+    group_ = get_group(group_id)
+    input_t = grad.reshape([B, N // sp_size, sp_size, S // sp_size, H])
+    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=group_)
+    output = output.permute(1, 0, 2, 3, 4).contiguous() 
+    output = output.reshape(B, N, S // sp_size, H)
+    return (output, None, None, None, None, None, None)
+torch.library.register_autograd(
+    "ulysses::all_to_all_qkv", all_to_all_qkv_backward, setup_context=all_to_all_qkv_setup_context
+)
+
+@torch.library.custom_op("ulysses::all_to_all_out", mutates_args=())
+def all_to_all_out(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, sp_size: int, group_id: int) -> torch.Tensor:
+    # b, n, s, h
+    rank = dist.get_rank()
+    group_ = get_group(group_id)
+    input_t = input_tensor.reshape([B, N // sp_size, sp_size, S // sp_size, H]).contiguous()
+    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=group_)
+    output = output.permute(1, 0, 2, 3, 4).contiguous() 
+    output = output.reshape(B, N, S // sp_size, H).contiguous()  
+    return output
+@torch.library.register_fake("ulysses::all_to_all_out")
+def _(input_tensor, B, S, N, H, sp_size, group_id):
+    fake_tensor = input_tensor.new_empty((B, N, S // sp_size, H))
+    return fake_tensor
+def all_to_all_out_setup_context(ctx, inputs, output) -> torch.Tensor:
+    input_tensor, B, S, N, H, sp_size, group_id = inputs
+    ctx.saved_data = (B, S, N, H, sp_size, group_id)
+def all_to_all_out_backward(ctx, grad):
+    B, S, N, H, sp_size, group_id = ctx.saved_data
+    group_ = get_group(group_id)
+    input_t = grad.reshape([B, sp_size, N // sp_size, S // sp_size, H]).contiguous()
+    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=group_)
+    output = output.permute(1, 2, 0, 3, 4).contiguous()  
+    output = output.reshape(B, N // sp_size, S, H).contiguous() 
+    return (output, None, None, None, None, None, None)
+torch.library.register_autograd(
+    "ulysses::all_to_all_out", all_to_all_out_backward, setup_context=all_to_all_out_setup_context
+)

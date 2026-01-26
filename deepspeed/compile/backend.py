@@ -24,9 +24,9 @@ from .profilers.graph_profile import MemoryProfilingInterpreter
 from .patch_compiled_func import patch_compiled_func, unpatch_compiled_func, get_backward_inputs
 from .util import get_input_nodes, get_activation_node_names, get_index_by_graph_id, get_deepcompile_handle, log_rank0
 from .partitioner import get_wrapped_partitioner
-from .inductor import register_custom_ops, patch_create_aot_dispatcher_function, patch_create_aot_dispatcher_function_ulysses
+from .inductor import register_custom_ops, patch_create_aot_dispatcher_function, patch_create_aot_dispatcher_function_ulysses, patch_compile_fx
 from .util import get_param_nodes
-from .patch_aot_module import wrapper
+#from .patch_aot_module import wrapper
 
 remaining_schedule = None
 next_pass_step = -1
@@ -73,7 +73,7 @@ def launch_compile_passes(global_steps: int):
         graph_order.clear()
         profiling_results.clear()
         param_manager.clear()
-        wrapper()
+        #wrapper()
 
 def set_time_and_tensor_size(graph_id, graph: Graph, mem, bwd, profiling_results):
     node_time = []
@@ -269,6 +269,8 @@ def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debu
             aot_mod = aot_module_simplified(gm, real_inputs)
             return torch._dynamo.optimize(**compile_kwargs)(aot_mod)
         elif backend == "inductor":
-            patch_create_aot_dispatcher_function_ulysses()
+            patch_compile_fx(gm, real_inputs)
             return torch._inductor.compile(gm, real_inputs)
+            #patch_create_aot_dispatcher_function_ulysses()
+            #return torch._inductor.compile(gm, real_inputs)
     return backend_fn

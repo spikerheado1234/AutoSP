@@ -51,7 +51,7 @@ def get_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--activation_checkpointing", action="store_true")
     parser.add_argument("--dataset_name", type=str, default="timdettmers/openassistant-guanaco")
-    parser.add_argument("--num_layers", type=int, default=None)
+    parser.add_argument("--num_layers", type=int, default=4)
     parser.add_argument("--compile", type=str, default="deepcompile")
     parser.add_argument("--passes", type=str, default=None)
     parser.add_argument("--backend", type=str, default="inductor")
@@ -66,7 +66,6 @@ def get_args():
     parser.add_argument("--experiment_folder", type=str, default="")
     parser.add_argument("--sp_size", type=int, default=2)
     parser.add_argument("--dp_size", type=int, default=1)
-
 
     return parser.parse_args()
 
@@ -146,7 +145,7 @@ def main():
     tokenizer.pad_token = tokenizer.convert_ids_to_tokens(2)
 
     def tokenize_function(examples):
-        return tokenizer(examples['text'], padding='max_length', max_length=10, truncation=True) ## Fix max_length and generate fake data instead to not exhaust disk.
+        return tokenizer(examples['text'], padding='max_length', max_length=args.seq_length, truncation=True) ## Fix max_length and generate fake data instead to not exhaust disk.
 
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
     tokenized_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
@@ -240,15 +239,14 @@ def main():
 
             for step, batch in enumerate(data_loader):
                 input_ids = batch['input_ids'].to(device)             # [B, S]
-                labels = torch.roll(input_ids, -1)
-                labels[:, 0] = tokenizer.bos_token
                 attention_mask = batch['attention_mask'].to(device)   # [B, S]
                 B, S = input_ids.shape
                 chunk_size = S // args.sp_size 
                 start = sp_rank * chunk_size
                 end = (sp_rank + 1) * chunk_size
                 input_ids_shard = input_ids[:, start:end]               # [B, S_shard]
-                labels_shard = labels[:, start:end]                  # [B, S_shard]
+                labels_shard = input_ids_shard.clone()                        # In HF, setting labels=input_ids internally shifts data for LM objective.
+
                 position_ids = torch.arange(S, device=device).unsqueeze(0)
                 position_ids_shard = torch.arange(start, end, device=device).unsqueeze(0)
 
@@ -264,11 +262,12 @@ def main():
 
                 start = accelerator.process_index * args.seq_length // accelerator.num_processes
                 end = start + args.seq_length // accelerator.num_processes
+
                 
                 with acc_context(model):
                     torch.cuda.reset_peak_memory_stats(device)
                     for _ in range(1):
-                        outputs = model(input_ids=input_ids_, attention_mask=attention_mask_, labels=labels_)
+                        outputs = model(input_ids=input_ids_, labels=labels_, attention_mask=None)
                         loss = outputs.loss
 
                         update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
@@ -373,10 +372,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        import pdb
         import traceback
         traceback.print_exc()
-        pdb.post_mortem()
     finally:
         # Ensure distributed resources are cleaned up to avoid leaks/warnings
         if dist.is_available() and dist.is_initialized():

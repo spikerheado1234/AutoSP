@@ -105,6 +105,7 @@ def extract_mlp_pattern_from_silu(silu_node: torch.fx.Node) -> list[torch.fx.Nod
     return None
 
 
+"""
 def wrapper():
     # for the case of aot_module_simplified
     unpatch_compiled_func()
@@ -222,7 +223,74 @@ def wrapper():
         return original_aot_module_simplified(mod, args, fw_compiler, bw_compiler, partition_fn, decompositions, keep_inference_input_mutations,
                                             inference_compiler, cudagraphs)
     torch._functorch.aot_autograd.aot_module_simplified = patch_aot_module_simplified
-    
+
+
+@torch.library.custom_op("ulysses::all_to_all_qkv", mutates_args=())
+def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int, node_name: str) -> torch.Tensor:
+    # b, n, s, h
+    rank = dist.get_rank()
+    input_t = input_tensor.reshape([B, world_size, N // world_size, S // world_size, H]).contiguous()
+    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    output = output.permute(1, 2, 0, 3, 4).contiguous()  
+    output = output.reshape(B, N // world_size, S, H).contiguous()
+    return output
+@torch.library.register_fake("ulysses::all_to_all_qkv")
+def _(input_tensor, B, S, N, H, world_size, node_name: str):
+    fake_tensor = input_tensor.new_empty((B, N // world_size, S, H))
+    return fake_tensor
+def all_to_all_qkv_setup_context(ctx, inputs, output) -> Tensor:
+    input_tensor, B, S, N, H, world_size, node_name = inputs
+    ctx.saved_data = (B, S, N, H, world_size, node_name)
+def all_to_all_qkv_backward(ctx, grad):
+    B, S, N, H, world_size, node_name = ctx.saved_data
+    input_t = grad.reshape([B, N // world_size, world_size, S // world_size, H])
+    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    output = output.permute(1, 0, 2, 3, 4).contiguous() 
+    output = output.reshape(B, N, S // world_size, H)
+    return (output, None, None, None, None, None, None)
+torch.library.register_autograd(
+    "ulysses::all_to_all_qkv", all_to_all_qkv_backward, setup_context=all_to_all_qkv_setup_context
+)
+
+@torch.library.custom_op("ulysses::all_to_all_out", mutates_args=())
+def all_to_all_out(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int) -> torch.Tensor:
+    # b, n, s, h
+    rank = dist.get_rank()
+    input_t = input_tensor.reshape([B, N // world_size, world_size, S // world_size, H]).contiguous()
+    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    output = output.permute(1, 0, 2, 3, 4).contiguous() 
+    output = output.reshape(B, N, S // world_size, H).contiguous()
+    return output
+@torch.library.register_fake("ulysses::all_to_all_out")
+def _(input_tensor, B, S, N, H, world_size):
+    fake_tensor = input_tensor.new_empty((B, N, S // world_size, H))
+    return fake_tensor
+def all_to_all_out_setup_context(ctx, inputs, output) -> Tensor:
+    input_tensor, B, S, N, H, world_size = inputs
+    ctx.saved_data = (B, S, N, H, world_size)
+def all_to_all_out_backward(ctx, grad):
+    B, S, N, H, world_size = ctx.saved_data
+    input_t = grad.reshape([B, world_size, N // world_size, S // world_size, H]).contiguous()
+    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
+    output = torch.empty_like(input_t)
+    all_to_all_inplace(output, input_t, group=dist.group.WORLD)
+    output = output.permute(1, 2, 0, 3, 4).contiguous()  
+    output = output.reshape(B, N // world_size, S, H).contiguous() 
+    return (output, None, None, None, None, None, None)
+torch.library.register_autograd(
+    "ulysses::all_to_all_out", all_to_all_out_backward, setup_context=all_to_all_out_setup_context
+)
+
+
+
+
+
 @torch.library.custom_op("ulysses::all_to_all_qkv", mutates_args=())
 def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, world_size: int, file_name: str) -> torch.Tensor:
     # b, n, s, h
@@ -290,3 +358,4 @@ def all_to_all_out_backward(ctx, grad):
 torch.library.register_autograd(
     "ulysses::all_to_all_out", all_to_all_out_backward, setup_context=all_to_all_out_setup_context
 )
+"""

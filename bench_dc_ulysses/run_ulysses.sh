@@ -7,6 +7,9 @@ DP_SIZE=${4:-1}
 LAYER_COUNT=${5:-""}
 EXP_NAME=${6:-""}
 
+export SP_SIZE=$SP_SIZE
+export DP_SIZE=$DP_SIZE
+
 if [[ "$COMPILE" != "eager" && "$COMPILE" != "compile" && "$COMPILE" != "deepcompile" && "$COMPILE" != "ringattn" ]]; then
     echo "Invalid mode: $COMPILE. Choose from eager, compile, deepcompile, ringattn."
     exit 1
