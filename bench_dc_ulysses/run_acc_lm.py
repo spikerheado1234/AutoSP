@@ -7,10 +7,7 @@ from typing import List
 
 import torch
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, enable_full_determinism
-from datasets import load_dataset
 from accelerate import Accelerator
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 from deepspeed.utils.timer import SynchronizedWallClockTimer
 from deepspeed.utils.logging import log_dist
@@ -45,7 +42,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--num_epochs", type=int, default=5)
+    parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -87,8 +84,8 @@ def main():
     if args.compile == "deepcompile":
         attention_backend = "sdpa"
     elif args.compile == "eager" or args.compile == "compile":
-        attention_backend = "ulyssess"
-        modeling_llama.ALL_ATTENTION_FUNCTIONS["ulyssess"] = ulysses_attention_forward
+        attention_backend = "ulysses"
+        modeling_llama.ALL_ATTENTION_FUNCTIONS["ulysses"] = ulysses_attention_forward
     elif args.compile == "ringattn":
         attention_backend = "ringattn"
         modeling_llama.ALL_ATTENTION_FUNCTIONS["ringattn"] = ring_attention_forward 
@@ -214,7 +211,7 @@ def main():
             labels = labels[:, start:end]
             position_ids = torch.arange(start, end, device=device).unsqueeze(0)
             
-            steps_per_epoch = 1
+            steps_per_epoch = 5
             with acc_context(model):
                 torch.cuda.reset_peak_memory_stats(device)
                 for _ in range(steps_per_epoch):
@@ -222,7 +219,7 @@ def main():
                         torch.cuda.synchronize()
                         fwd_usage_prior = SynchronizedWallClockTimer.memory_usage()
                         fwd_start = time.time()
-                    outputs = model(input_ids=input_ids, attention_mask=None, labels=labels, position_ids=position_ids)
+                    outputs = model(input_ids=input_ids, attention_mask=None, labels=labels, position_ids=None)
                     if profile:
                         torch.cuda.synchronize()
                         fwd_end = time.time()
@@ -244,42 +241,42 @@ def main():
                     optimizer.step()
                     optimizer.zero_grad()
 
-                ## PERF benchmarking code, ensure warmup prior. ##
-                #torch.cuda.synchronize()
-                #start = time.time()
-                #for _ in range(100):
-                #    outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, position_ids=position_ids)
-                #    loss = outputs.loss
-                #    #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
+                    ## PERF benchmarking code, ensure warmup prior. ##
+                    #torch.cuda.synchronize()
+                    #start = time.time()
+                    #for _ in range(100):
+                    #    outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, position_ids=position_ids)
+                    #    loss = outputs.loss
+                    #    #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
 
-                #    update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
-                #        or (not is_deepspeed and accelerator.sync_gradients)
-                #    
-                #    #loss_log_file.write(f"{global_step},{loss.item()}\n")
-                #    #loss_log_file.flush()
+                    #    update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
+                    #        or (not is_deepspeed and accelerator.sync_gradients)
+                    #    
+                    #    #loss_log_file.write(f"{global_step},{loss.item()}\n")
+                    #    #loss_log_file.flush()
 
-                #    accelerator.backward(loss)
+                    #    accelerator.backward(loss)
 
-                #    optimizer.step()
-                #    optimizer.zero_grad()
-                #torch.cuda.synchronize()
-                #end = time.time()
-                #print(f'time taken: {end-start}')
+                    #    optimizer.step()
+                    #    optimizer.zero_grad()
+                    #torch.cuda.synchronize()
+                    #end = time.time()
+                    #print(f'time taken: {end-start}')
 
-                global_step += 1
+                    global_step += 1
 
-                if update_step:
-                    log_dist(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}", ranks=[0])
+                    if update_step:
+                        print(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}")
 
-                    iter_times.append(time.time() - start_iter)
-                    memory.append(torch.cuda.max_memory_allocated() / (1024 ** 3))
-                    start_iter = time.time()
+                        iter_times.append(time.time() - start_iter)
+                        memory.append(torch.cuda.max_memory_allocated() / (1024 ** 3))
+                        start_iter = time.time()
 
-            if do_profile:
-                prof.step()
+                if do_profile:
+                    prof.step()
 
-            if global_step >= args.bench_step * args.gradient_accumulation_steps:
-                break
+                if global_step >= args.bench_step * args.gradient_accumulation_steps:
+                    break
 
     torch.cuda.synchronize()
 
