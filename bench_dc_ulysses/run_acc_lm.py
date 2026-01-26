@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 from datetime import datetime
 from contextlib import nullcontext
@@ -12,6 +13,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 from deepspeed.utils.timer import SynchronizedWallClockTimer
+from deepspeed.utils.logging import log_dist
 
 import torch
 import random
@@ -19,6 +21,7 @@ import numpy as np
 import csv
 import time
 
+from transformers.models.llama import modeling_llama
 from distributed_attention import ulysses_attention_forward
 from ring_attention import ring_attention_forward
 
@@ -78,25 +81,24 @@ def main():
     is_deepspeed = accelerator.state.deepspeed_plugin is not None
 
     # Load model and tokenizer
-    if accelerator.is_main_process:
-        print("Loading model and tokenizer...")
+    log_dist("Loading model...", ranks=[0])
 
     model_name = args.model_name
     if args.compile == "deepcompile":
         attention_backend = "sdpa"
+    elif args.compile == "eager" or args.compile == "compile":
+        attention_backend = "ulyssess"
+        modeling_llama.ALL_ATTENTION_FUNCTIONS["ulyssess"] = ulysses_attention_forward
+    elif args.compile == "ringattn":
+        attention_backend = "ringattn"
+        modeling_llama.ALL_ATTENTION_FUNCTIONS["ringattn"] = ring_attention_forward 
     else:
-        if args.compile == "eager" or args.compile == "compile":
-            from transformers.models.llama import modeling_llama
-            attention_backend = "ulyssess"
-            modeling_llama.ALL_ATTENTION_FUNCTIONS["ulyssess"] = ulysses_attention_forward
-        elif args.compile == "ringattn":
-            from transformers.models.llama import modeling_llama
-            attention_backend = "ringattn"
-            modeling_llama.ALL_ATTENTION_FUNCTIONS["ringattn"] = ring_attention_forward 
+        log_dist(f"ERROR: Unknown compile backend '{args.compile}'. Supported: deepcompile, eager, compile, ringattn", ranks=[0])
+        sys.exit(1)
 
     if args.num_layers is not None:
         model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-        print(f"num_hidden_layers: {model_config.num_hidden_layers} -> {args.num_layers}")
+        log_dist(f"num_hidden_layers: {model_config.num_hidden_layers} -> {args.num_layers}", ranks=[0])
         model_config.num_hidden_layers = args.num_layers
         model_config._attn_implementation = attention_backend
         model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
@@ -112,46 +114,31 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
 
     # Load dataset
-    if accelerator.is_main_process:
-        print("Loading dataset...")
+    log_dist("Loading dataset...", ranks=[0])
 
     g = torch.Generator()
     g.manual_seed(12)
-    dataset = load_dataset('ag_news', split='train[:1%]')
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    tokenizer.pad_token = tokenizer.convert_ids_to_tokens(2)
-
-    def tokenize_function(examples):
-        return tokenizer(examples['text'], padding='max_length', max_length=10, truncation=True) ## Fix max_length and generate fake data instead to not exhaust disk.
-
-    tokenized_dataset = dataset.map(tokenize_function, batched=True)
-    tokenized_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
-
-    sampler = DistributedSampler(tokenized_dataset, num_replicas=accelerator.num_processes, rank=accelerator.process_index, seed=12, shuffle=False)  
-    data_loader = DataLoader(tokenized_dataset, batch_size=args.batch_size, sampler=sampler, num_workers=4, worker_init_fn=seed_worker, generator=g)
-
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
 
-    model, optimizer, data_loader = accelerator.prepare(model, optimizer, data_loader)
-    print(f"Model prepared: {model.__class__}")
+    # Set batch size for DeepSpeed if using it
+    if is_deepspeed:
+        accelerator.state.deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = args.batch_size
 
-    ### CUSTOM DEBUGGING ###
-    ## everything tried induces a graph break. ## 
-    ### CUSTOM DEBUGGING -- END ###
+    model, optimizer = accelerator.prepare(model, optimizer)
+    log_dist(f"Model prepared: {model.__class__}", ranks=[0])
 
     if args.compile == "deepcompile":
-        print(f"Running deepcompile with backend={args.backend}")
+        log_dist(f"Running deepcompile with backend={args.backend}", ranks=[0])
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True
         model.compile(backend=args.backend)
     elif args.compile == "compile" or args.compile == "ringattn":
-        print(f"Running torch.compile with backend={args.backend}")
+        log_dist(f"Running torch.compile with backend={args.backend}", ranks=[0])
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True
         model = torch.compile(model, backend=args.backend)
     else:
-        print(f"Running eager")
+        log_dist(f"Running eager", ranks=[0])
 
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     model_name = args.model_name.split("/")[-1]
@@ -193,7 +180,7 @@ def main():
     iter_times = []
     memory = []
 
-    print(f"Using global sequence length: {args.seq_length}")
+    log_dist(f"Using global sequence length: {args.seq_length}", ranks=[0])
 
     # See https://github.com/microsoft/DeepSpeed/issues/6793
     acc_context = nullcontext if is_deepspeed else accelerator.accumulate
@@ -211,43 +198,40 @@ def main():
         for epoch in range(args.num_epochs):
             start_iter = time.time()
 
-            for step, batch in enumerate(data_loader):
-                input_ids = torch.tensor([
-                    [1 for _ in range(args.seq_length)]
-                ], device=device)
-                attention_mask = torch.tensor([
-                    [1] * args.seq_length
-                ], device=device)
+            for _ in range(1):
+                seq_len = args.seq_length
+                input_ids = torch.arange(0, seq_len, device=device).unsqueeze(0)
+                
+                # TODO: need to handle padding mask
+                # currently default is to use causal_mask for all backends
+                mask_len = int(seq_len * 0.8)
+                attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=device)
+                attention_mask[:, mask_len:] = 0 
+                
+                labels = input_ids.clone()
                 start = accelerator.process_index * args.seq_length // accelerator.num_processes
                 end = start + args.seq_length // accelerator.num_processes
+                input_ids = input_ids[:, start:end]
+                attention_mask = attention_mask[:, start:end]
+                labels = labels[:, start:end]
+                position_ids = torch.arange(start, end, device=device).unsqueeze(0)
                 
-                if args.compile in ("compile", "eager", "ringattn"):
-                    start = accelerator.process_index * args.seq_length // accelerator.num_processes
-                    end = start + args.seq_length // accelerator.num_processes
-                    input_ids = input_ids[:, start:end]
-                    attention_mask = attention_mask[:, start:end]
-                    position_ids = torch.arange(start, end, device=device).unsqueeze(0)
-                else:
-                    start = accelerator.process_index * args.seq_length // accelerator.num_processes
-                    end = start + args.seq_length // accelerator.num_processes
-                    input_ids = input_ids[:, start:end]
-                    position_ids = None
-                
+                steps_per_epoch = 1
                 with acc_context(model):
                     torch.cuda.reset_peak_memory_stats(device)
-                    for _ in range(1):
+                    for _ in range(steps_per_epoch):
                         if profile:
                             torch.cuda.synchronize()
                             fwd_usage_prior = SynchronizedWallClockTimer.memory_usage()
                             fwd_start = time.time()
-                        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, position_ids=position_ids)
+                        outputs = model(input_ids=input_ids, attention_mask=None, labels=labels, position_ids=position_ids)
                         if profile:
                             torch.cuda.synchronize()
                             fwd_end = time.time()
                             fwd_usage_post = SynchronizedWallClockTimer.memory_usage()
-                            print('fwd time: ' + str(fwd_end-fwd_start))
-                            print('fwd memory prior: ' + str(fwd_usage_prior))
-                            print('fwd memory post: ' + str(fwd_usage_post))
+                            log_dist('fwd time: ' + str(fwd_end-fwd_start), ranks=[0])
+                            log_dist('fwd memory prior: ' + str(fwd_usage_prior), ranks=[0])
+                            log_dist('fwd memory post: ' + str(fwd_usage_post), ranks=[0])
                         loss = outputs.loss
                         #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
 
@@ -287,7 +271,7 @@ def main():
                     global_step += 1
 
                     if update_step:
-                        print(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}")
+                        log_dist(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}", ranks=[0])
 
                         iter_times.append(time.time() - start_iter)
                         memory.append(torch.cuda.max_memory_allocated() / (1024 ** 3))
@@ -317,7 +301,7 @@ def main():
 
         is_deepcompile = is_deepspeed and model._config.compile_config.deepcompile
         msg = f"{args.model_name} ds={is_deepspeed} np={accelerator.num_processes} batch_size={args.batch_size} seq={args.seq_length} compile={args.compile} backend={args.backend} deepcompile={is_deepcompile} compile_time={compile_time_sum} iteration time: {sum(iter_times) / (1 + len(iter_times)):.4f} alloc_mem: {torch.cuda.memory_allocated()} peak_mem: {torch.cuda.max_memory_allocated()}"
-        print(msg)
+        log_dist(msg, ranks=[0])
 
         if args.profile_dir:
             from pathlib import Path

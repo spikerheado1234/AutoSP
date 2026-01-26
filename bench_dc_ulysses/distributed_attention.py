@@ -14,7 +14,7 @@ def ulysses_attention_forward(
     is_causal=True,
     **kwargs,
 ):
-    # Ulysses core expects (batch, seq, heads, dim)
+    # Ulysses expects (batch, seq, heads, dim)
     # HF standard provides (batch, heads, seq, dim)
     q = query_states.transpose(1, 2).contiguous()
     k = key_states.transpose(1, 2).contiguous()

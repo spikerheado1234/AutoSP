@@ -400,11 +400,11 @@ class DistributedAttention(torch.nn.Module):
             grad_fn_k = key.grad_fn.next_functions[0][0]
             grad_fn_k.register_prehook(bwd_hook(layer_type='k'))
 
-        # #out shape : e.g., [s:h/p:]
-        # if rotary_pos_emb is not None:
-        #     pos_emb_cos, pos_emb_sin = rotary_pos_emb[0].permute(1, 0, 2, 3), rotary_pos_emb[1].permute(1, 0, 2, 3)
-        #     query_layer = apply_rotary_pos_emb(query_layer, pos_emb_cos, pos_emb_sin)
-        #     key_layer = apply_rotary_pos_emb(key_layer, pos_emb_cos, pos_emb_sin)
+        #out shape : e.g., [s:h/p:]
+        if rotary_pos_emb is not None:
+            pos_emb_cos, pos_emb_sin = rotary_pos_emb[0].permute(1, 0, 2, 3), rotary_pos_emb[1].permute(1, 0, 2, 3)
+            query_layer = apply_rotary_pos_emb(query_layer, pos_emb_cos, pos_emb_sin)
+            key_layer = apply_rotary_pos_emb(key_layer, pos_emb_cos, pos_emb_sin)
 
         attn_output = self.local_attn(query_layer, key_layer, value_layer, *args, **kwargs)
         output = _SeqAllToAll.apply(self.spg, attn_output, self.gather_idx, self.scatter_idx, batch_dim_idx,

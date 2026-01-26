@@ -5,6 +5,9 @@
 
 from typing import Dict, List, Callable
 import time
+import io
+import sys
+import os
 
 import torch
 import torch._inductor.scheduler
@@ -41,6 +44,27 @@ opt_pass_times = []
 opt_passes = {}
 
 remaining_bwd_compile_count = 0
+
+
+def log_graph_0(gm: GraphModule):
+    """Log graph module to files on rank 0 only."""
+    if dist.get_rank() != 0:
+        return
+    
+    os.makedirs("logs", exist_ok=True)
+    
+    old_stdout = sys.stdout
+    sys.stdout = io.StringIO()
+    gm.print_readable()
+    readable_output = sys.stdout.getvalue()
+    sys.stdout = old_stdout
+    
+    with open("logs/gm_readable.txt", "w") as f:
+        f.write(readable_output)
+    
+    # Capture normal gm string representation
+    with open("logs/gm_normal.txt", "w") as f:
+        print(gm.graph)
 
 
 def register_compile_pass(name: str, opt_pass_fn):
@@ -265,10 +289,9 @@ def make_backend(backend, compile_kwargs={}, free_activation=False, debug_log=Fa
 
 def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=False):
     def backend_fn(gm: GraphModule, real_inputs):
-        if backend == "eager":
-            aot_mod = aot_module_simplified(gm, real_inputs)
-            return torch._dynamo.optimize(**compile_kwargs)(aot_mod)
-        elif backend == "inductor":
-            patch_create_aot_dispatcher_function_ulysses()
-            return torch._inductor.compile(gm, real_inputs)
+        if debug_log:
+            log_graph_0(gm)
+        
+        patch_create_aot_dispatcher_function_ulysses()
+        return torch._inductor.compile(gm, real_inputs)
     return backend_fn
