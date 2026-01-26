@@ -233,49 +233,43 @@ def main():
     ## Set profiling flag accordingly. ##
     profile = False
 
+    sp_rank = dist.get_rank() % args.sp_size
     with prof_context as prof:
         for epoch in range(args.num_epochs):
             start_iter = time.time()
 
             for step, batch in enumerate(data_loader):
-                input_ids = torch.tensor([
-                    [1 for _ in range(args.seq_length)]
-                ], device=device)
-                attention_mask = torch.tensor([
-                    [1] * args.seq_length
-                ], device=device)
+                input_ids = batch['input_ids'].to(device)             # [B, S]
+                labels = torch.roll(input_ids, -1)
+                labels[:, 0] = tokenizer.bos_token
+                attention_mask = batch['attention_mask'].to(device)   # [B, S]
+                B, S = input_ids.shape
+                chunk_size = S // args.sp_size 
+                start = sp_rank * chunk_size
+                end = (sp_rank + 1) * chunk_size
+                input_ids_shard = input_ids[:, start:end]               # [B, S_shard]
+                labels_shard = labels[:, start:end]                  # [B, S_shard]
+                position_ids = torch.arange(S, device=device).unsqueeze(0)
+                position_ids_shard = torch.arange(start, end, device=device).unsqueeze(0)
+
+                if args.compile in ["compile", "eager", "ringattn"]:
+                    #input_ids_ = input_ids
+                    input_ids_ = input_ids_shard 
+                    attention_mask_ = attention_mask
+                    labels_ = labels_shard
+                else:
+                    input_ids_ = input_ids_shard
+                    attention_mask_ = attention_mask
+                    labels_ = labels_shard
+
                 start = accelerator.process_index * args.seq_length // accelerator.num_processes
                 end = start + args.seq_length // accelerator.num_processes
-                
-                if args.compile in ("compile", "eager", "ringattn"):
-                    start = accelerator.process_index * args.seq_length // accelerator.num_processes
-                    end = start + args.seq_length // accelerator.num_processes
-                    input_ids = input_ids[:, start:end]
-                    attention_mask = attention_mask[:, start:end]
-                    position_ids = torch.arange(start, end, device=device).unsqueeze(0)
-                else:
-                    start = accelerator.process_index * args.seq_length // accelerator.num_processes
-                    end = start + args.seq_length // accelerator.num_processes
-                    input_ids = input_ids[:, start:end]
-                    position_ids = None
                 
                 with acc_context(model):
                     torch.cuda.reset_peak_memory_stats(device)
                     for _ in range(1):
-                        if profile:
-                            torch.cuda.synchronize()
-                            fwd_usage_prior = SynchronizedWallClockTimer.memory_usage()
-                            fwd_start = time.time()
-                        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, position_ids=position_ids)
-                        if profile:
-                            torch.cuda.synchronize()
-                            fwd_end = time.time()
-                            fwd_usage_post = SynchronizedWallClockTimer.memory_usage()
-                            print('fwd time: ' + str(fwd_end-fwd_start))
-                            print('fwd memory prior: ' + str(fwd_usage_prior))
-                            print('fwd memory post: ' + str(fwd_usage_post))
+                        outputs = model(input_ids=input_ids_, attention_mask=attention_mask_, labels=labels_)
                         loss = outputs.loss
-                        #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
 
                         update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
                             or (not is_deepspeed and accelerator.sync_gradients)
