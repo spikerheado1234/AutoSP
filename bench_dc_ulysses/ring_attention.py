@@ -507,7 +507,7 @@ def ring_attention_forward(
 
     # Ring attention expects (batch, seq, heads, dim)
     # Call the ring flash attention function
-    gid = dist.get_rank() / int(os.getenv('SP_SIZE'))
+    gid = dist.get_rank() // int(os.getenv('SP_SIZE'))
     attn_output = ring_flash_attn_func(
         q,
         k,

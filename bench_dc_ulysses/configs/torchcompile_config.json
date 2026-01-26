@@ -3,7 +3,7 @@
         "enabled": true
     },
     "zero_optimization":{
-        "stage": 0
+        "stage": 1
     },
     "gradient_accumulation_steps": 1,
     "gradient_clipping": "auto",
