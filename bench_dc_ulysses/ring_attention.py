@@ -6,7 +6,9 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import inspect
+import os
 from functools import cache
+from sp_dp_registry import get_group
 
 from flash_attn.flash_attn_interface import _flash_attn_forward, _flash_attn_backward
 
@@ -505,6 +507,7 @@ def ring_attention_forward(
 
     # Ring attention expects (batch, seq, heads, dim)
     # Call the ring flash attention function
+    gid = dist.get_rank() / os.getenv('SP_SIZE')
     attn_output = ring_flash_attn_func(
         q,
         k,
@@ -516,7 +519,7 @@ def ring_attention_forward(
         alibi_slopes=None,
         deterministic=False,
         return_attn_probs=False,
-        group=dist.group.WORLD,
+        group=get_group(gid),
     )
     
     # Output is already in (batch, seq, heads, dim) format, which HF expects after attention

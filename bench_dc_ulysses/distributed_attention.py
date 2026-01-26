@@ -1,6 +1,8 @@
 import torch
 import torch.distributed as dist
 from deepspeed.sequence.layer import DistributedAttention
+from sp_dp_registry import get_group 
+import os
 
 # 1. Define the custom interface function
 def ulysses_attention_forward(
@@ -19,12 +21,12 @@ def ulysses_attention_forward(
     q = query_states.transpose(1, 2).contiguous()
     k = key_states.transpose(1, 2).contiguous()
     v = value_states.transpose(1, 2).contiguous()
-
+    gid = dist.get_rank() // os.getenv('SP_SIZE')
     # Initialize the Ulysses engine if it doesn't exist on this layer yet
     if not hasattr(self, "ulysses_engine"):
         self.ulysses_engine = DistributedAttention(
             sdpa_wrapper,
-            dist.group.WORLD,
+            get_group(gid),
             scatter_idx=2, # Shard heads
             gather_idx=1   # Gather sequences
         )

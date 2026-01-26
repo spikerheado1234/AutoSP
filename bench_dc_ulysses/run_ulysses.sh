@@ -2,8 +2,10 @@
 
 SEQ_LEN=${1:-1024}
 COMPILE=${2:-eager}
-LAYER_COUNT=${3:-""}
-EXP_NAME=${4:-""}
+SP_SIZE=${3:-2}
+DP_SIZE=${4:-1}
+LAYER_COUNT=${5:-""}
+EXP_NAME=${6:-""}
 
 if [[ "$COMPILE" != "eager" && "$COMPILE" != "compile" && "$COMPILE" != "deepcompile" && "$COMPILE" != "ringattn" ]]; then
     echo "Invalid mode: $COMPILE. Choose from eager, compile, deepcompile, ringattn."
@@ -13,7 +15,7 @@ fi
 HOST_IP=$(hostname -i | awk '{print $1}')
 PORT=$(python3 -c "import socket; s = socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 NUM_NODES=1
-NUM_PROCESSES=2
+NUM_PROCESSES=$((SP_SIZE * DP_SIZE))
 # MODEL="meta-llama/Llama-2-7b-chat-hf"
 # MODEL="meta-llama/Llama-3.1-8B"
 # MODEL="meta-llama/Llama-3.2-1B"
@@ -41,7 +43,7 @@ echo "COMPILE: ${COMPILE}"
 echo "SEQ_LEN: ${SEQ_LEN}"
 echo "LOG_FILE: ${LOG_FILE}"
 
-EXTRA_OPTS="--seq_length=${SEQ_LEN} --experiment_folder=${EXP_NAME}"
+EXTRA_OPTS="--seq_length=${SEQ_LEN} --experiment_folder=${EXP_NAME} --SP=${SP_SIZE} --DP=${DP_SIZE}"
 
 # Only pass --num_layers if provided
 NUM_LAYER_OPTS=""

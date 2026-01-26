@@ -18,12 +18,15 @@ import random
 import numpy as np
 import csv
 import time
+import os
 
 from distributed_attention import ulysses_attention_forward
 from ring_attention import ring_attention_forward
+from sp_dp_registration import get_group, register_groups
 
 torch.set_float32_matmul_precision("high")
 
+## This dictionary is globally should be globally visible everywhere. ##
 def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
@@ -61,12 +64,17 @@ def get_args():
     parser.add_argument("--warmup_step", type=int, default=15)
     parser.add_argument("--print_interval", type=int, default=1)
     parser.add_argument("--experiment_folder", type=str, default="")
+    parser.add_argument("--sp_size", type=int, default=2)
+    parser.add_argument("--dp_size", type=int, default=1)
+
 
     return parser.parse_args()
 
 def main():
     args = get_args()
     set_seed(12)
+    assert accelerator.num_processes == args.sp_size * args.dp_size, 'Incorrect dp/sp sizing'
+
     if args.deterministic:
         enable_full_determinism(12)
         from torch._inductor import config
@@ -108,6 +116,21 @@ def main():
     if args.activation_checkpointing:
         model.gradient_checkpointing_enable()
 
+    ## Instantiate process groups for SP+DP interoperation. ##
+    os.environ['SP_SIZE'] = args.sp_size
+    os.environ['DP_SIZE'] = args.dp_size
+    
+    if args.compile in ["eager", "compile", "ringattn"]:
+        ## We register in the run_acc_lm.py file for baselines to reduce code-duplication.
+        ## Else the registration happens within the SP compiler pass within deepspeed.
+        group_listing = []
+        offset = 0
+        for _ in range(args.dp_size):
+            group_listing.append([i + offset for i in range(args.sp_size)])
+            offset += args.sp_size
+
+        register_groups(group_listing)
+
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -128,7 +151,10 @@ def main():
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
     tokenized_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
 
-    sampler = DistributedSampler(tokenized_dataset, num_replicas=accelerator.num_processes, rank=accelerator.process_index, seed=12, shuffle=False)  
+    num_replicas_ = args.dp_size
+    rank_ = accelerator.process_index // args.sp_size
+
+    sampler = DistributedSampler(tokenized_dataset, num_replicas=num_replicas_, rank=rank_, seed=12, shuffle=False)  
     data_loader = DataLoader(tokenized_dataset, batch_size=args.batch_size, sampler=sampler, num_workers=4, worker_init_fn=seed_worker, generator=g)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
