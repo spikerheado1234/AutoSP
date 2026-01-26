@@ -22,7 +22,7 @@ import os
 
 from distributed_attention import ulysses_attention_forward
 from ring_attention import ring_attention_forward
-from sp_dp_registration import get_group, register_groups
+from sp_dp_registry import get_group, register_groups
 
 torch.set_float32_matmul_precision("high")
 
@@ -51,7 +51,7 @@ def get_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--activation_checkpointing", action="store_true")
     parser.add_argument("--dataset_name", type=str, default="timdettmers/openassistant-guanaco")
-    parser.add_argument("--num_layers", type=int, default=None)
+    parser.add_argument("--num_layers", type=int, default=1)
     parser.add_argument("--compile", type=str, default="deepcompile")
     parser.add_argument("--passes", type=str, default=None)
     parser.add_argument("--backend", type=str, default="inductor")
@@ -73,7 +73,6 @@ def get_args():
 def main():
     args = get_args()
     set_seed(12)
-    assert accelerator.num_processes == args.sp_size * args.dp_size, 'Incorrect dp/sp sizing'
 
     if args.deterministic:
         enable_full_determinism(12)
@@ -84,6 +83,7 @@ def main():
     accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
     device = accelerator.device
     is_deepspeed = accelerator.state.deepspeed_plugin is not None
+    assert accelerator.num_processes == args.sp_size * args.dp_size, 'Incorrect dp/sp sizing'
 
     # Load model and tokenizer
     if accelerator.is_main_process:
@@ -117,8 +117,8 @@ def main():
         model.gradient_checkpointing_enable()
 
     ## Instantiate process groups for SP+DP interoperation. ##
-    os.environ['SP_SIZE'] = args.sp_size
-    os.environ['DP_SIZE'] = args.dp_size
+    os.environ['SP_SIZE'] = str(args.sp_size)
+    os.environ['DP_SIZE'] = str(args.dp_size)
     
     if args.compile in ["eager", "compile", "ringattn"]:
         ## We register in the run_acc_lm.py file for baselines to reduce code-duplication.

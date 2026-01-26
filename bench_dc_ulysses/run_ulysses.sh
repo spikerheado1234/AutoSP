@@ -43,7 +43,7 @@ echo "COMPILE: ${COMPILE}"
 echo "SEQ_LEN: ${SEQ_LEN}"
 echo "LOG_FILE: ${LOG_FILE}"
 
-EXTRA_OPTS="--seq_length=${SEQ_LEN} --experiment_folder=${EXP_NAME} --SP=${SP_SIZE} --DP=${DP_SIZE}"
+EXTRA_OPTS="--seq_length=${SEQ_LEN} --experiment_folder=${EXP_NAME} --sp_size=${SP_SIZE} --dp_size=${DP_SIZE}"
 
 # Only pass --num_layers if provided
 NUM_LAYER_OPTS=""

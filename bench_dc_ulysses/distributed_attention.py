@@ -21,7 +21,7 @@ def ulysses_attention_forward(
     q = query_states.transpose(1, 2).contiguous()
     k = key_states.transpose(1, 2).contiguous()
     v = value_states.transpose(1, 2).contiguous()
-    gid = dist.get_rank() // os.getenv('SP_SIZE')
+    gid = dist.get_rank() // int(os.getenv('SP_SIZE'))
     # Initialize the Ulysses engine if it doesn't exist on this layer yet
     if not hasattr(self, "ulysses_engine"):
         self.ulysses_engine = DistributedAttention(
