@@ -331,21 +331,24 @@ def patch_compile_fx(gm, example_inputs, options=None):
             qkv = list(node.args[:3])
             for i, old_arg in enumerate(qkv):
                 with gm.graph.inserting_after(old_arg):
-                    new_arg = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_qkv.default, (old_arg, B, S, N, H, sp_size, group_id, ), {}, name=None)
+                    new_arg = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_qkv.default, (old_arg, B, S, N, H, sp_size, group_id, str(i)), {}, name=None)
                     old_arg.replace_all_uses_with(new_arg)
-                    new_arg.args = (old_arg, B, S, N, H, sp_size, group_id, )
+                    new_arg.args = (old_arg, B, S, N, H, sp_size, group_id, str(i))
             with gm.graph.inserting_after(node):
                 new_node = gm.graph.create_node('call_function', torch.ops.ulysses.all_to_all_out.default, (node, B, S, N, H, sp_size, group_id, ), {}, name=None)
                 node.replace_all_uses_with(new_node)
-                new_node.args = (node, B, S, N, H, sp_size, group_id, )
+                new_node.args = (node, B, S, N, H, sp_size, group_id,)
     gm.recompile()
     return original_compile(gm, example_inputs, options)
 
 @torch.library.custom_op("ulysses::all_to_all_qkv", mutates_args=())
-def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, sp_size: int, group_id: int) -> torch.Tensor:
+def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, sp_size: int, group_id: int, name: str) -> torch.Tensor:
     # b, n, s, h
     group_ = get_group(group_id)
     rank = dist.get_rank()
+
+    torch.save(input_tensor, f'qkv_prior_{name}_{rank}.pt')
+
     input_t = input_tensor.reshape([B, sp_size, N // sp_size, S // sp_size, H]).contiguous()
     input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
     output = torch.empty_like(input_t)
@@ -354,22 +357,22 @@ def all_to_all_qkv(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, s
     output = output.reshape(B, N // sp_size, S, H).contiguous()
     return output
 @torch.library.register_fake("ulysses::all_to_all_qkv")
-def _(input_tensor, B, S, N, H, sp_size, group_id):
+def _(input_tensor, B, S, N, H, sp_size, group_id, name: str):
     fake_tensor = input_tensor.new_empty((B, N // sp_size, S, H))
     return fake_tensor
 def all_to_all_qkv_setup_context(ctx, inputs, output) -> torch.Tensor:
-    input_tensor, B, S, N, H, sp_size, group_id = inputs
+    input_tensor, B, S, N, H, sp_size, group_id, name = inputs
     ctx.saved_data = (B, S, N, H, sp_size, group_id)
 def all_to_all_qkv_backward(ctx, grad):
     B, S, N, H, sp_size, group_id = ctx.saved_data
     group_ = get_group(group_id)
-    input_t = grad.reshape([B, N // sp_size, sp_size, S // sp_size, H])
-    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+    input_t = grad.reshape([B, N // sp_size, sp_size, S // sp_size, H]).contiguous()
+    input_t = input_t.permute(2, 0, 1, 3, 4).contiguous() # [sp_size, B, N // sp_size, S // sp_size, H]
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=group_)
-    output = output.permute(1, 0, 2, 3, 4).contiguous() 
-    output = output.reshape(B, N, S // sp_size, H)
-    return (output, None, None, None, None, None, None)
+    output = output.permute(1, 0, 2, 3, 4).contiguous() # [B, sp_size, N // sp_size, S // sp_size, H]
+    output = output.reshape(B, N, S // sp_size, H).contiguous()
+    return (output, None, None, None, None, None, None, None)
 torch.library.register_autograd(
     "ulysses::all_to_all_qkv", all_to_all_qkv_backward, setup_context=all_to_all_qkv_setup_context
 )
@@ -379,15 +382,23 @@ def all_to_all_out(input_tensor: torch.Tensor, B: int, S: int, N: int, H: int, s
     # b, n, s, h
     rank = dist.get_rank()
     group_ = get_group(group_id)
-    input_t = input_tensor.reshape([B, N // sp_size, sp_size, S // sp_size, H]).contiguous()
+    input_t = input_tensor.reshape([B, N // sp_size, sp_size, S // sp_size, H]).contiguous() 
     input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=group_)
     output = output.permute(1, 0, 2, 3, 4).contiguous() 
     output = output.reshape(B, N, S // sp_size, H).contiguous()  
+    print(f'pre permute shape: {output.shape}')
+    #output = output.permute(0, 2, 1, 3).contiguous()
+    print(f'post permute shape: {output.shape}')
+    #output = torch.load(f'attn_eager_post_{rank}.pt')
+    print(f'output: {output.sum()} rank: {rank}')
+    #if rank == 0:
+    #    torch.save(output, 'attn_post_.pt')
     return output
 @torch.library.register_fake("ulysses::all_to_all_out")
 def _(input_tensor, B, S, N, H, sp_size, group_id):
+    #fake_tensor = input_tensor.new_empty((B, S // sp_size, N, H))
     fake_tensor = input_tensor.new_empty((B, N, S // sp_size, H))
     return fake_tensor
 def all_to_all_out_setup_context(ctx, inputs, output) -> torch.Tensor:
@@ -396,11 +407,12 @@ def all_to_all_out_setup_context(ctx, inputs, output) -> torch.Tensor:
 def all_to_all_out_backward(ctx, grad):
     B, S, N, H, sp_size, group_id = ctx.saved_data
     group_ = get_group(group_id)
+    #grad = grad.permute(0, 2, 1, 3).contiguous()
     input_t = grad.reshape([B, sp_size, N // sp_size, S // sp_size, H]).contiguous()
-    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
+    input_t = input_t.permute(1, 0, 2, 3, 4).contiguous() # [sp_size, B, N // sp_size, S // sp_size, H].
     output = torch.empty_like(input_t)
     all_to_all_inplace(output, input_t, group=group_)
-    output = output.permute(1, 2, 0, 3, 4).contiguous()  
+    output = output.permute(1, 2, 0, 3, 4).contiguous() # [B, N // sp_size, sp_size, S // sp_size, H]. 
     output = output.reshape(B, N // sp_size, S, H).contiguous() 
     return (output, None, None, None, None, None, None)
 torch.library.register_autograd(

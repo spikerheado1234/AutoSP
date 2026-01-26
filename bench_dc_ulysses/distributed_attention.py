@@ -16,6 +16,13 @@ def ulysses_attention_forward(
     is_causal=True,
     **kwargs,
 ):
+
+    # input is b s n h -> all to all -> scatter on n (2), gather on s (1)
+    # attn: b n s h 
+    # second all to all -> scatter on 1, gather on (2) so shape must be: b s n h.
+    torch.save(query_states, f'q_eager_prior_{dist.get_rank()}.pt')
+    torch.save(key_states, f'k_eager_prior_{dist.get_rank()}.pt')
+    torch.save(value_states, f'v_eager_prior_{dist.get_rank()}.pt')
     # Ulysses core expects (batch, seq, heads, dim)
     # HF standard provides (batch, heads, seq, dim)
     q = query_states.transpose(1, 2).contiguous()
@@ -41,6 +48,7 @@ def ulysses_attention_forward(
         is_causal=is_causal,
         scale=scaling
     )
+    torch.save(attn_output.permute(0, 2, 1, 3), f'attn_eager_post_{dist.get_rank()}.pt')
 
     # Return to HF format: (batch, seq, heads, dim) -> (batch, heads, seq, dim)
     # Note: Transformers usually expects (B, N, S, H) back, 

@@ -51,7 +51,7 @@ def get_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--activation_checkpointing", action="store_true")
     parser.add_argument("--dataset_name", type=str, default="timdettmers/openassistant-guanaco")
-    parser.add_argument("--num_layers", type=int, default=4)
+    parser.add_argument("--num_layers", type=int, default=1)
     parser.add_argument("--compile", type=str, default="deepcompile")
     parser.add_argument("--passes", type=str, default=None)
     parser.add_argument("--backend", type=str, default="inductor")
