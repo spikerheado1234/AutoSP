@@ -197,91 +197,89 @@ def main():
     with prof_context as prof:
         for epoch in range(args.num_epochs):
             start_iter = time.time()
+            seq_len = args.seq_length
+            input_ids = torch.arange(0, seq_len, device=device).unsqueeze(0)
+            
+            # TODO: need to handle padding mask
+            # currently default is to use causal_mask for all backends
+            mask_len = int(seq_len * 0.8)
+            attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=device)
+            attention_mask[:, mask_len:] = 0 
+            
+            labels = input_ids.clone()
+            start = accelerator.process_index * args.seq_length // accelerator.num_processes
+            end = start + args.seq_length // accelerator.num_processes
+            input_ids = input_ids[:, start:end]
+            attention_mask = attention_mask[:, start:end]
+            labels = labels[:, start:end]
+            position_ids = torch.arange(start, end, device=device).unsqueeze(0)
+            
+            steps_per_epoch = 1
+            with acc_context(model):
+                torch.cuda.reset_peak_memory_stats(device)
+                for _ in range(steps_per_epoch):
+                    if profile:
+                        torch.cuda.synchronize()
+                        fwd_usage_prior = SynchronizedWallClockTimer.memory_usage()
+                        fwd_start = time.time()
+                    outputs = model(input_ids=input_ids, attention_mask=None, labels=labels, position_ids=position_ids)
+                    if profile:
+                        torch.cuda.synchronize()
+                        fwd_end = time.time()
+                        fwd_usage_post = SynchronizedWallClockTimer.memory_usage()
+                        log_dist('fwd time: ' + str(fwd_end-fwd_start), ranks=[0])
+                        log_dist('fwd memory prior: ' + str(fwd_usage_prior), ranks=[0])
+                        log_dist('fwd memory post: ' + str(fwd_usage_post), ranks=[0])
+                    loss = outputs.loss
+                    #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
 
-            for _ in range(1):
-                seq_len = args.seq_length
-                input_ids = torch.arange(0, seq_len, device=device).unsqueeze(0)
-                
-                # TODO: need to handle padding mask
-                # currently default is to use causal_mask for all backends
-                mask_len = int(seq_len * 0.8)
-                attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=device)
-                attention_mask[:, mask_len:] = 0 
-                
-                labels = input_ids.clone()
-                start = accelerator.process_index * args.seq_length // accelerator.num_processes
-                end = start + args.seq_length // accelerator.num_processes
-                input_ids = input_ids[:, start:end]
-                attention_mask = attention_mask[:, start:end]
-                labels = labels[:, start:end]
-                position_ids = torch.arange(start, end, device=device).unsqueeze(0)
-                
-                steps_per_epoch = 1
-                with acc_context(model):
-                    torch.cuda.reset_peak_memory_stats(device)
-                    for _ in range(steps_per_epoch):
-                        if profile:
-                            torch.cuda.synchronize()
-                            fwd_usage_prior = SynchronizedWallClockTimer.memory_usage()
-                            fwd_start = time.time()
-                        outputs = model(input_ids=input_ids, attention_mask=None, labels=labels, position_ids=position_ids)
-                        if profile:
-                            torch.cuda.synchronize()
-                            fwd_end = time.time()
-                            fwd_usage_post = SynchronizedWallClockTimer.memory_usage()
-                            log_dist('fwd time: ' + str(fwd_end-fwd_start), ranks=[0])
-                            log_dist('fwd memory prior: ' + str(fwd_usage_prior), ranks=[0])
-                            log_dist('fwd memory post: ' + str(fwd_usage_post), ranks=[0])
-                        loss = outputs.loss
-                        #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
+                    update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
+                        or (not is_deepspeed and accelerator.sync_gradients)
+                    
+                    loss_log_file.write(f"{global_step},{loss.item()}\n")
+                    loss_log_file.flush()
 
-                        update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
-                            or (not is_deepspeed and accelerator.sync_gradients)
-                        
-                        loss_log_file.write(f"{global_step},{loss.item()}\n")
-                        loss_log_file.flush()
+                    accelerator.backward(loss)
 
-                        accelerator.backward(loss)
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-                        optimizer.step()
-                        optimizer.zero_grad()
+                ## PERF benchmarking code, ensure warmup prior. ##
+                #torch.cuda.synchronize()
+                #start = time.time()
+                #for _ in range(100):
+                #    outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, position_ids=position_ids)
+                #    loss = outputs.loss
+                #    #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
 
-                    ## PERF benchmarking code, ensure warmup prior. ##
-                    #torch.cuda.synchronize()
-                    #start = time.time()
-                    #for _ in range(100):
-                    #    outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, position_ids=position_ids)
-                    #    loss = outputs.loss
-                    #    #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
+                #    update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
+                #        or (not is_deepspeed and accelerator.sync_gradients)
+                #    
+                #    #loss_log_file.write(f"{global_step},{loss.item()}\n")
+                #    #loss_log_file.flush()
 
-                    #    update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
-                    #        or (not is_deepspeed and accelerator.sync_gradients)
-                    #    
-                    #    #loss_log_file.write(f"{global_step},{loss.item()}\n")
-                    #    #loss_log_file.flush()
+                #    accelerator.backward(loss)
 
-                    #    accelerator.backward(loss)
+                #    optimizer.step()
+                #    optimizer.zero_grad()
+                #torch.cuda.synchronize()
+                #end = time.time()
+                #print(f'time taken: {end-start}')
 
-                    #    optimizer.step()
-                    #    optimizer.zero_grad()
-                    #torch.cuda.synchronize()
-                    #end = time.time()
-                    #print(f'time taken: {end-start}')
+                global_step += 1
 
-                    global_step += 1
+                if update_step:
+                    log_dist(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}", ranks=[0])
 
-                    if update_step:
-                        log_dist(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}", ranks=[0])
+                    iter_times.append(time.time() - start_iter)
+                    memory.append(torch.cuda.max_memory_allocated() / (1024 ** 3))
+                    start_iter = time.time()
 
-                        iter_times.append(time.time() - start_iter)
-                        memory.append(torch.cuda.max_memory_allocated() / (1024 ** 3))
-                        start_iter = time.time()
+            if do_profile:
+                prof.step()
 
-                if do_profile:
-                    prof.step()
-
-                if global_step >= args.bench_step * args.gradient_accumulation_steps:
-                    break
+            if global_step >= args.bench_step * args.gradient_accumulation_steps:
+                break
 
     torch.cuda.synchronize()
 
