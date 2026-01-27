@@ -1,29 +1,38 @@
 import os
-import sys
+import warnings
+
+# Suppress tokenizers parallelism warning (must be before importing transformers)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import argparse
 from datetime import datetime
 from contextlib import nullcontext
 from typing import List
 
 import torch
+
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, enable_full_determinism
+from datasets import load_dataset
 from accelerate import Accelerator
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 from deepspeed.utils.timer import SynchronizedWallClockTimer
-from deepspeed.utils.logging import log_dist
 
 import torch
 import random
 import numpy as np
 import csv
 import time
+import os
 
-from transformers.models.llama import modeling_llama
 from distributed_attention import ulysses_attention_forward
-from ring_attention import ring_attention_forward
+# from ring_attention import ring_attention_forward
+# from sp_dp_registry import get_group, register_groups
 
 torch.set_float32_matmul_precision("high")
 
+## This dictionary is globally should be globally visible everywhere. ##
 def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
@@ -42,13 +51,13 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--num_epochs", type=int, default=1)
+    parser.add_argument("--num_epochs", type=int, default=2)
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--activation_checkpointing", action="store_true")
     parser.add_argument("--dataset_name", type=str, default="timdettmers/openassistant-guanaco")
-    parser.add_argument("--num_layers", type=int, default=None)
+    parser.add_argument("--num_layers", type=int, default=1)
     parser.add_argument("--compile", type=str, default="deepcompile")
     parser.add_argument("--passes", type=str, default=None)
     parser.add_argument("--backend", type=str, default="inductor")
@@ -61,12 +70,15 @@ def get_args():
     parser.add_argument("--warmup_step", type=int, default=15)
     parser.add_argument("--print_interval", type=int, default=1)
     parser.add_argument("--experiment_folder", type=str, default="")
+    parser.add_argument("--sp_size", type=int, default=2)
+    parser.add_argument("--dp_size", type=int, default=1)
 
     return parser.parse_args()
 
 def main():
     args = get_args()
     set_seed(12)
+
     if args.deterministic:
         enable_full_determinism(12)
         from torch._inductor import config
@@ -76,26 +88,28 @@ def main():
     accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
     device = accelerator.device
     is_deepspeed = accelerator.state.deepspeed_plugin is not None
+    assert accelerator.num_processes == args.sp_size * args.dp_size, 'Incorrect dp/sp sizing'
 
     # Load model and tokenizer
-    log_dist("Loading model...", ranks=[0])
+    if accelerator.is_main_process:
+        print("Loading model and tokenizer...")
 
     model_name = args.model_name
     if args.compile == "deepcompile":
         attention_backend = "sdpa"
-    elif args.compile == "eager" or args.compile == "compile":
-        attention_backend = "ulysses"
-        modeling_llama.ALL_ATTENTION_FUNCTIONS["ulysses"] = ulysses_attention_forward
-    elif args.compile == "ringattn":
-        attention_backend = "ringattn"
-        modeling_llama.ALL_ATTENTION_FUNCTIONS["ringattn"] = ring_attention_forward 
     else:
-        log_dist(f"ERROR: Unknown compile backend '{args.compile}'. Supported: deepcompile, eager, compile, ringattn", ranks=[0])
-        sys.exit(1)
+        if args.compile == "eager" or args.compile == "compile":
+            from transformers.models.llama import modeling_llama
+            attention_backend = "ulyssess"
+            modeling_llama.ALL_ATTENTION_FUNCTIONS["ulyssess"] = ulysses_attention_forward
+        elif args.compile == "ringattn":
+            from transformers.models.llama import modeling_llama
+            attention_backend = "ringattn"
+            modeling_llama.ALL_ATTENTION_FUNCTIONS["ringattn"] = ring_attention_forward 
 
     if args.num_layers is not None:
         model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-        log_dist(f"num_hidden_layers: {model_config.num_hidden_layers} -> {args.num_layers}", ranks=[0])
+        print(f"num_hidden_layers: {model_config.num_hidden_layers} -> {args.num_layers}")
         model_config.num_hidden_layers = args.num_layers
         model_config._attn_implementation = attention_backend
         model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
@@ -107,35 +121,68 @@ def main():
     if args.activation_checkpointing:
         model.gradient_checkpointing_enable()
 
+    ## Instantiate process groups for SP+DP interoperation. ##
+    os.environ['SP_SIZE'] = str(args.sp_size)
+    os.environ['DP_SIZE'] = str(args.dp_size)
+    
+    if args.compile in ["eager", "compile", "ringattn"]:
+        ## We register in the run_acc_lm.py file for baselines to reduce code-duplication.
+        ## Else the registration happens within the SP compiler pass within deepspeed.
+        group_listing = []
+        offset = 0
+        for _ in range(args.dp_size):
+            group_listing.append([i + offset for i in range(args.sp_size)])
+            offset += args.sp_size
+
+        # register_groups(group_listing)
+
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
     # Load dataset
-    log_dist("Loading dataset...", ranks=[0])
+    if accelerator.is_main_process:
+        print("Loading dataset...")
 
     g = torch.Generator()
     g.manual_seed(12)
+    dataset = load_dataset('ag_news', split='train[:1%]')
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.convert_ids_to_tokens(2)
+
+    def tokenize_function(examples):
+        return tokenizer(examples['text'], padding='max_length', max_length=args.seq_length, truncation=True) ## Fix max_length and generate fake data instead to not exhaust disk.
+
+    tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    tokenized_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
+
+    num_replicas_ = args.dp_size
+    rank_ = accelerator.process_index // args.sp_size
+
+    sampler = DistributedSampler(tokenized_dataset, num_replicas=num_replicas_, rank=rank_, seed=12, shuffle=False)  
+    data_loader = DataLoader(tokenized_dataset, batch_size=args.batch_size, sampler=sampler, num_workers=4, worker_init_fn=seed_worker, generator=g)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
 
-    # Set batch size for DeepSpeed if using it
-    if is_deepspeed:
-        accelerator.state.deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = args.batch_size
+    model, optimizer, data_loader = accelerator.prepare(model, optimizer, data_loader)
+    print(f"Model prepared: {model.__class__}")
 
-    model, optimizer = accelerator.prepare(model, optimizer)
-    log_dist(f"Model prepared: {model.__class__}", ranks=[0])
+    ### CUSTOM DEBUGGING ###
+    ## everything tried induces a graph break. ## 
+    ### CUSTOM DEBUGGING -- END ###
 
     if args.compile == "deepcompile":
-        log_dist(f"Running deepcompile with backend={args.backend}", ranks=[0])
+        print(f"Running deepcompile with backend={args.backend}")
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True
         model.compile(backend=args.backend)
     elif args.compile == "compile" or args.compile == "ringattn":
-        log_dist(f"Running torch.compile with backend={args.backend}", ranks=[0])
+        print(f"Running torch.compile with backend={args.backend}")
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True
         model = torch.compile(model, backend=args.backend)
     else:
-        log_dist(f"Running eager", ranks=[0])
+        print(f"Running eager")
 
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     model_name = args.model_name.split("/")[-1]
@@ -177,7 +224,7 @@ def main():
     iter_times = []
     memory = []
 
-    log_dist(f"Using global sequence length: {args.seq_length}", ranks=[0])
+    print(f"Using global sequence length: {args.seq_length}")
 
     # See https://github.com/microsoft/DeepSpeed/issues/6793
     acc_context = nullcontext if is_deepspeed else accelerator.accumulate
@@ -191,55 +238,54 @@ def main():
     ## Set profiling flag accordingly. ##
     profile = False
 
+    sp_rank = dist.get_rank() % args.sp_size
     with prof_context as prof:
         for epoch in range(args.num_epochs):
             start_iter = time.time()
-            seq_len = args.seq_length
-            input_ids = torch.arange(0, seq_len, device=device).unsqueeze(0)
-            
-            # TODO: need to handle padding mask
-            # currently default is to use causal_mask for all backends
-            mask_len = int(seq_len * 0.8)
-            attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=device)
-            attention_mask[:, mask_len:] = 0 
-            
-            labels = input_ids.clone()
-            start = accelerator.process_index * args.seq_length // accelerator.num_processes
-            end = start + args.seq_length // accelerator.num_processes
-            input_ids = input_ids[:, start:end]
-            attention_mask = attention_mask[:, start:end]
-            labels = labels[:, start:end]
-            position_ids = torch.arange(start, end, device=device).unsqueeze(0)
-            
-            steps_per_epoch = 5
-            with acc_context(model):
-                torch.cuda.reset_peak_memory_stats(device)
-                for _ in range(steps_per_epoch):
-                    if profile:
-                        torch.cuda.synchronize()
-                        fwd_usage_prior = SynchronizedWallClockTimer.memory_usage()
-                        fwd_start = time.time()
-                    outputs = model(input_ids=input_ids, attention_mask=None, labels=labels, position_ids=None)
-                    if profile:
-                        torch.cuda.synchronize()
-                        fwd_end = time.time()
-                        fwd_usage_post = SynchronizedWallClockTimer.memory_usage()
-                        log_dist('fwd time: ' + str(fwd_end-fwd_start), ranks=[0])
-                        log_dist('fwd memory prior: ' + str(fwd_usage_prior), ranks=[0])
-                        log_dist('fwd memory post: ' + str(fwd_usage_post), ranks=[0])
-                    loss = outputs.loss
-                    #print(f'outputs: {outputs} [rank: {dist.get_rank()}]')
 
-                    update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
-                        or (not is_deepspeed and accelerator.sync_gradients)
-                    
-                    loss_log_file.write(f"{global_step},{loss.item()}\n")
-                    loss_log_file.flush()
+            for step, batch in enumerate(data_loader):
+                input_ids = batch['input_ids'].to(device)             # [B, S]
+                attention_mask = batch['attention_mask'].to(device)   # [B, S]
+                B, S = input_ids.shape
+                chunk_size = S // args.sp_size 
+                start = sp_rank * chunk_size
+                end = (sp_rank + 1) * chunk_size
+                input_ids_shard = input_ids[:, start:end]               # [B, S_shard]
+                labels_shard = input_ids_shard.clone()                        # In HF, setting labels=input_ids internally shifts data for LM objective.
 
-                    accelerator.backward(loss)
+                position_ids = torch.arange(S, device=device).unsqueeze(0)
+                position_ids_shard = torch.arange(start, end, device=device).unsqueeze(0)
 
-                    optimizer.step()
-                    optimizer.zero_grad()
+                if args.compile in ["compile", "eager", "ringattn"]:
+                    #input_ids_ = input_ids
+                    input_ids_ = input_ids_shard 
+                    attention_mask_ = attention_mask
+                    labels_ = labels_shard
+                else:
+                    input_ids_ = input_ids_shard
+                    attention_mask_ = attention_mask
+                    labels_ = labels_shard
+
+                start = accelerator.process_index * args.seq_length // accelerator.num_processes
+                end = start + args.seq_length // accelerator.num_processes
+
+                
+                with acc_context(model):
+                    torch.cuda.reset_peak_memory_stats(device)
+                    for _ in range(1):
+                        outputs = model(input_ids=input_ids_, labels=labels_, attention_mask=None)
+                        loss = outputs.loss
+
+                        update_step = (is_deepspeed and model.is_gradient_accumulation_boundary()) \
+                            or (not is_deepspeed and accelerator.sync_gradients)
+                        
+                        loss_log_file.write(f"{global_step},{loss.item()}\n")
+                        loss_log_file.flush()
+
+                        accelerator.backward(loss)
+
+                        optimizer.step()
+                        optimizer.zero_grad()
 
                     ## PERF benchmarking code, ensure warmup prior. ##
                     #torch.cuda.synchronize()
@@ -296,7 +342,7 @@ def main():
 
         is_deepcompile = is_deepspeed and model._config.compile_config.deepcompile
         msg = f"{args.model_name} ds={is_deepspeed} np={accelerator.num_processes} batch_size={args.batch_size} seq={args.seq_length} compile={args.compile} backend={args.backend} deepcompile={is_deepcompile} compile_time={compile_time_sum} iteration time: {sum(iter_times) / (1 + len(iter_times)):.4f} alloc_mem: {torch.cuda.memory_allocated()} peak_mem: {torch.cuda.max_memory_allocated()}"
-        log_dist(msg, ranks=[0])
+        print(msg)
 
         if args.profile_dir:
             from pathlib import Path
@@ -332,10 +378,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        import pdb
         import traceback
         traceback.print_exc()
-        pdb.post_mortem()
     finally:
         # Ensure distributed resources are cleaned up to avoid leaks/warnings
         if dist.is_available() and dist.is_initialized():

@@ -28,8 +28,9 @@ from .patch_compiled_func import patch_compiled_func, unpatch_compiled_func, get
 from .util import get_input_nodes, get_activation_node_names, get_index_by_graph_id, get_deepcompile_handle, log_rank0
 from .partitioner import get_wrapped_partitioner
 from .inductor import register_custom_ops, patch_create_aot_dispatcher_function, patch_create_aot_dispatcher_function_ulysses
-from .util import get_param_nodes
+from .util import log_graph_0
 from .patch_aot_module import wrapper
+from .autosp import apply_autosp
 
 remaining_schedule = None
 next_pass_step = -1
@@ -44,28 +45,6 @@ opt_pass_times = []
 opt_passes = {}
 
 remaining_bwd_compile_count = 0
-
-
-def log_graph_0(gm: GraphModule):
-    """Log graph module to files on rank 0 only."""
-    if dist.get_rank() != 0:
-        return
-    
-    os.makedirs("logs", exist_ok=True)
-    
-    old_stdout = sys.stdout
-    sys.stdout = io.StringIO()
-    gm.print_readable()
-    readable_output = sys.stdout.getvalue()
-    sys.stdout = old_stdout
-    
-    with open("logs/gm_readable.txt", "w") as f:
-        f.write(readable_output)
-    
-    # Capture normal gm string representation
-    with open("logs/gm_normal.txt", "w") as f:
-        print(gm.graph)
-
 
 def register_compile_pass(name: str, opt_pass_fn):
     assert name not in opt_passes, f"Opt pass {name} already registered"
@@ -97,7 +76,6 @@ def launch_compile_passes(global_steps: int):
         graph_order.clear()
         profiling_results.clear()
         param_manager.clear()
-        wrapper()
 
 def set_time_and_tensor_size(graph_id, graph: Graph, mem, bwd, profiling_results):
     node_time = []
@@ -287,11 +265,14 @@ def make_backend(backend, compile_kwargs={}, free_activation=False, debug_log=Fa
     return backend_fn
 
 
-def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=False):
+def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=True):
     def backend_fn(gm: GraphModule, real_inputs):
         if debug_log:
-            log_graph_0(gm)
+            log_graph_0(gm, filename="before")
+        autosp_gm = apply_autosp(gm)
+        if debug_log:
+            log_graph_0(autosp_gm, filename="after")
         
-        patch_create_aot_dispatcher_function_ulysses()
-        return torch._inductor.compile(gm, real_inputs)
+        # patch_create_aot_dispatcher_function_ulysses()
+        return torch._inductor.compile(autosp_gm, real_inputs)
     return backend_fn

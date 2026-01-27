@@ -63,6 +63,8 @@ from torch.fx.passes.shape_prop import ShapeProp
 from .patch_compiled_func import patch_compiled_func, unpatch_compiled_func, get_backward_inputs
 from torch.utils.checkpoint import CheckpointPolicy
 
+from .util import log_graph_0
+
 BS_Shape = None
 NH_Shape = None
 World_Size = None
@@ -219,6 +221,7 @@ def wrapper():
         #             mlp_node.meta["recompute"] = CheckpointPolicy.MUST_RECOMPUTE
 
         # mod.recompile()
+        log_graph_0(mod, filename="original_after")
         return original_aot_module_simplified(mod, args, fw_compiler, bw_compiler, partition_fn, decompositions, keep_inference_input_mutations,
                                             inference_compiler, cudagraphs)
     torch._functorch.aot_autograd.aot_module_simplified = patch_aot_module_simplified

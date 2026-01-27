@@ -1925,8 +1925,9 @@ class DeepSpeedEngine(Module):
         if self.fp16_auto_cast():
             inputs = self._cast_inputs_half(inputs)
 
-        if self.is_deepcompile_enabled():
-            self.launch_compile_passes(self.global_steps)
+        launch_compile_passes = getattr(self, 'launch_compile_passes', None)
+        if self.is_deepcompile_enabled() and launch_compile_passes is not None:
+            launch_compile_passes(self.global_steps)
 
         loss = self.module(*inputs, **kwargs)
 
