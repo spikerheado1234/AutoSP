@@ -19,10 +19,10 @@ HOST_IP=$(hostname -i | awk '{print $1}')
 PORT=$(python3 -c "import socket; s = socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 NUM_NODES=1
 NUM_PROCESSES=$((SP_SIZE * DP_SIZE))
-# MODEL="meta-llama/Llama-2-7b-chat-hf"
+MODEL="meta-llama/Llama-2-7b-chat-hf"
 # MODEL="meta-llama/Llama-3.1-8B"
 # MODEL="meta-llama/Llama-3.2-1B"
-MODEL="meta-llama/Llama-3.2-3B"
+# MODEL="meta-llama/Llama-3.2-3B"
 PROFILE_DIR=${PROFILE_DIR:-profiles}
 mkdir -p ${PROFILE_DIR}
 PROFILE_OPTS="--profile_dir ${PROFILE_DIR}"

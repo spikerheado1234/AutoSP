@@ -315,17 +315,17 @@ def patch_compile_fx(gm, example_inputs, options=None):
                 )
                 node.replace_input_with(old_arg, new_arg)
         # constant
-        if node.name == "reshape":
-            old_arg = node.args[0]
-            with gm.graph.inserting_before(node):
-                new_arg = gm.graph.create_node(
-                    op=old_arg.op,
-                    target=old_arg.target,
-                    args=(0, S),
-                    kwargs=old_arg.kwargs,
-                    name=None
-                )
-                node.replace_input_with(old_arg, new_arg) 
+        #if node.name == "reshape":
+        #    old_arg = node.args[0]
+        #    with gm.graph.inserting_before(node):
+        #        new_arg = gm.graph.create_node(
+        #            op=old_arg.op,
+        #            target=old_arg.target,
+        #            args=(0, S),
+        #            kwargs=old_arg.kwargs,
+        #            name=None
+        #        )
+        #        node.replace_input_with(old_arg, new_arg) 
         import torch.nn.functional as F
         if node.target == F.scaled_dot_product_attention:
             qkv = list(node.args[:3])
@@ -360,6 +360,7 @@ def _(input_tensor, B, S, N, H, sp_size, group_id):
 def all_to_all_qkv_setup_context(ctx, inputs, output) -> torch.Tensor:
     input_tensor, B, S, N, H, sp_size, group_id = inputs
     ctx.saved_data = (B, S, N, H, sp_size, group_id)
+@torch.compiler.disable
 def all_to_all_qkv_backward(ctx, grad):
     B, S, N, H, sp_size, group_id = ctx.saved_data
     group_ = get_group(group_id)
@@ -393,6 +394,20 @@ def _(input_tensor, B, S, N, H, sp_size, group_id):
 def all_to_all_out_setup_context(ctx, inputs, output) -> torch.Tensor:
     input_tensor, B, S, N, H, sp_size, group_id = inputs
     ctx.saved_data = (B, S, N, H, sp_size, group_id)
+
+from torch._subclasses.fake_tensor import is_fake
+from torch._subclasses.functional_tensor import FunctionalTensor
+def is_real_tensor(t):
+    """Check if tensor has real data (safe for any tensor type)"""
+    try:
+        # FakeTensors and FunctionalTensors wrapping FakeTensors
+        # will fail when accessing actual data
+        _ = t.untyped_storage().size()
+        return True
+    except Exception:
+        return False
+
+@torch.compiler.disable
 def all_to_all_out_backward(ctx, grad):
     B, S, N, H, sp_size, group_id = ctx.saved_data
     group_ = get_group(group_id)
@@ -402,6 +417,10 @@ def all_to_all_out_backward(ctx, grad):
     all_to_all_inplace(output, input_t, group=group_)
     output = output.permute(1, 2, 0, 3, 4).contiguous()  
     output = output.reshape(B, N // sp_size, S, H).contiguous() 
+    #if is_real_tensor(output):
+    #    rank = dist.get_rank()
+    #    print(output.sum())
+    #    #torch.save(output, f'a2a_out_bwd_dc_{dist.get_rank()}.pt')
     return (output, None, None, None, None, None, None)
 torch.library.register_autograd(
     "ulysses::all_to_all_out", all_to_all_out_backward, setup_context=all_to_all_out_setup_context

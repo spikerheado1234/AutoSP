@@ -262,15 +262,47 @@ def make_backend(backend, compile_kwargs={}, free_activation=False, debug_log=Fa
 
     return backend_fn
 
+@torch.library.custom_op("debug::save", mutates_args=())
+def save_op(tensor: torch.Tensor, name: str) -> torch.Tensor:
+    torch.save(tensor, name)
+    return tensor.clone()
+
+@torch.library.register_fake("debug::save")
+def _(tensor: torch.Tensor, name: str) -> torch.Tensor:
+    fake_tensor = input_tensor.empty_like(tensor)
+    return fake_tensor
 
 def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=False):
+    def fw_compiler(gm, sample_inputs):
+        return gm
+    def bw_compiler(gm, sample_inputs):
+        for node in gm.graph.nodes:
+            if node.name == "view_25":
+                rank = dist.get_rank()
+                name = f'a2a_out_bwd_pre_dc_{rank}.pt'
+                with gm.graph.inserting_after(node):
+                    new_node = gm.graph.create_node('call_function', torch.ops.debug.save.default, (node, name))
+                    node.replace_all_uses_with(new_node)
+                    new_node.args = (node, name)
+            if node.name == "view_27":
+                rank = dist.get_rank()
+                name = f'a2a_out_bwd_{rank}.pt'
+                with gm.graph.inserting_after(node):
+                    new_node = gm.graph.create_node('call_function', torch.ops.debug.save.default, (node, name))
+                    node.replace_all_uses_with(new_node)
+                    new_node.args = (node, name)
+        gm.recompile()
+        print(gm)
+        return gm
     def backend_fn(gm: GraphModule, real_inputs):
         if backend == "eager":
             aot_mod = aot_module_simplified(gm, real_inputs)
             return torch._dynamo.optimize(**compile_kwargs)(aot_mod)
         elif backend == "inductor":
             patch_compile_fx(gm, real_inputs)
-            return torch._inductor.compile(gm, real_inputs)
+            aot_mod = aot_module_simplified(gm, real_inputs, fw_compiler=fw_compiler, bw_compiler=bw_compiler)
+            return torch._dynamo.optimize(**compile_kwargs)(aot_mod)
+            #return torch._inductor.compile(gm, real_inputs)
             #patch_create_aot_dispatcher_function_ulysses()
             #return torch._inductor.compile(gm, real_inputs)
     return backend_fn

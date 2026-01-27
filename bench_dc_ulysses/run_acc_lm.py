@@ -45,13 +45,13 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--num_epochs", type=int, default=5)
+    parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--activation_checkpointing", action="store_true")
     parser.add_argument("--dataset_name", type=str, default="timdettmers/openassistant-guanaco")
-    parser.add_argument("--num_layers", type=int, default=4)
+    parser.add_argument("--num_layers", type=int, default=1)
     parser.add_argument("--compile", type=str, default="deepcompile")
     parser.add_argument("--passes", type=str, default=None)
     parser.add_argument("--backend", type=str, default="inductor")
@@ -370,6 +370,11 @@ if __name__ == "__main__":
     torch._dynamo.config.cache_size_limit = 128
     torch._dynamo.config.optimize_ddp = False
     try:
+        #import depyf
+        #with depyf.prepare_debug("depyf_debug_dir"):
+        #    main()
+        #with depyf.debug():
+        #    main()
         main()
     except Exception as e:
         import traceback

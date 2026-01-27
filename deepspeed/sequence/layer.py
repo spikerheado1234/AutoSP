@@ -18,6 +18,11 @@ from deepspeed.module_inject.tp_shard import get_shard_size_list, set_num_kv_hea
 from deepspeed.utils import groups
 
 
+
+## For debugging purposes only, remove post done. ##
+global_count: int = 0
+
+
 def _rotate_half(x):
     """
     change sign so the last dimension becomes [-odd, +even]
@@ -294,11 +299,21 @@ class _SeqAllToAll(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor, None, None]:
+        global global_count
 
-        return (None,
+        if global_count == 0:
+            rank = dist.get_rank()
+            torch.save(grad_output[0], f'eager_pre_a2a_bwd_{rank}.pt')
+
+        out = (None,
                 _SeqAllToAll.apply(ctx.group, *grad_output, ctx.gather_idx, ctx.scatter_idx, ctx.batch_dim_idx,
                                    ctx.stream, ctx.handle, ctx.type, False), None, None, None, None, None, None, None)
+        if global_count == 0:
+            rank = dist.get_rank()
+            torch.save(out[1], f'eager_post_a2a_bwd_{rank}.pt')
 
+        global_count += 1
+        return out
 
 class DistributedAttention(torch.nn.Module):
     """Initialization.
