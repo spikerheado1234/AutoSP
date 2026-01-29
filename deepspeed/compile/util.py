@@ -3,6 +3,9 @@
 
 # DeepSpeed Team
 
+import os
+import sys
+import io
 import functools
 import operator
 from typing import List, Tuple, Dict
@@ -67,20 +70,25 @@ def log_rank0(msg: str, enable: bool = False):
     if dist.get_rank() == 0 and enable:
         print(msg)
 
-import os
-def log_rank0_graph(gm: GraphModule, enable: bool = False):
-    if dist.get_rank() == 0 and enable:
-        output_path = "/u/zwang22/desktop/bench_dc_ulysses/graph/before_insertion.txt"
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w") as f:
-            f.write("=" * 35 + " Print Graph " + "=" * 35 + "\n\n")
-            f.write(str(gm.graph) + "\n\n")
-
-            f.write("=" * 35 + " Print Node " + "=" * 35 + "\n\n")
-            for node in gm.graph.nodes:
-                f.write(f"{node.op} {node.name} : {node.target}\n")
-                if node.meta:
-                    f.write(f"    meta[val] = {node.meta['val']} \n")
+def log_graph_0(gm: GraphModule, filename = "gm.txt"):
+    """Log graph module to files on rank 0 only."""
+    if dist.get_rank() != 0:
+        return
+    
+    os.makedirs("logs", exist_ok=True)
+    
+    old_stdout = sys.stdout
+    sys.stdout = io.StringIO()
+    gm.print_readable()
+    readable_output = sys.stdout.getvalue()
+    sys.stdout = old_stdout
+    
+    with open(f"logs/{filename}_readable.txt", "w") as f:
+        f.write(readable_output)
+    
+    # Capture normal gm string representation
+    with open(f"logs/{filename}_normal.txt", "w") as f:
+        f.write(str(gm.graph))
     
 def get_no_copy_ops():
     # Need to compile custom ops

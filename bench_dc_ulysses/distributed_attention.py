@@ -1,10 +1,10 @@
+import os
 import torch
 import torch.distributed as dist
 from deepspeed.sequence.layer import DistributedAttention
 
-# 1. Define the custom interface function
 def ulysses_attention_forward(
-    self,  # This will be the LlamaAttention instance
+    self,
     query_states,
     key_states,
     value_states,
@@ -14,13 +14,12 @@ def ulysses_attention_forward(
     is_causal=True,
     **kwargs,
 ):
-    # Ulysses core expects (batch, seq, heads, dim)
+    # Ulysses expects (batch, seq, heads, dim)
     # HF standard provides (batch, heads, seq, dim)
     q = query_states.transpose(1, 2).contiguous()
     k = key_states.transpose(1, 2).contiguous()
     v = value_states.transpose(1, 2).contiguous()
-
-    # Initialize the Ulysses engine if it doesn't exist on this layer yet
+    
     if not hasattr(self, "ulysses_engine"):
         self.ulysses_engine = DistributedAttention(
             sdpa_wrapper,
@@ -51,17 +50,15 @@ def sdpa_wrapper(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=Tru
     k = key.permute(0, 2, 1, 3).contiguous()
     v = value.permute(0, 2, 1, 3).contiguous()
     
-    # For distributed attention, we cannot use the original mask since it's not distributed.
-    # Use is_causal instead.
     output = torch.nn.functional.scaled_dot_product_attention(
         q, k, v,
         attn_mask=None,  # Ignore the mask for distributed case
         dropout_p=dropout_p,
         is_causal=is_causal,
         scale=scale,
-        enable_gqa=True
+        enable_gqa=False
     )
     
-    # Permute back from [b, n, s, h] to [b, s, n, h]
+    # Permute back from [b, n, s, h] to [b, s, n, h] for all-to-all on output
     output = output.permute(0, 2, 1, 3).contiguous()
     return output

@@ -15,7 +15,6 @@ import torch.distributed as dist
 
 from .util import get_input_nodes
 from .graph_param import DSGraphParamManager
-from torch.fx.experimental.symbolic_shapes import ShapeEnv
 
 original_create_aot_dispatcher_function = create_aot_dispatcher_function
 
@@ -96,24 +95,6 @@ def patch_create_aot_dispatcher_function(graph_id: int, z3_partition: bool, make
         return original_create_aot_dispatcher_function(flat_fn, fake_flat_args, aot_config, fake_mode, shape_env)
 
     torch._functorch.aot_autograd.create_aot_dispatcher_function = wrapper_create_aot_dispatcher_function
-
-def patch_create_aot_dispatcher_function_ulysses():    
-    def wrapper_create_aot_dispatcher_function(
-        flat_fn,
-        fake_flat_args,
-        aot_config,
-        fake_mode,
-        shape_env,
-    ):
-        def wrap_partition_fn(partition_fn):
-            def wrapped_partition_fn(*args, **kwargs):
-                fw_module, bw_module = partition_fn(*args, **kwargs)
-                return fw_module, bw_module
-            return wrapped_partition_fn
-        aot_config.partition_fn = wrap_partition_fn(aot_config.partition_fn)
-        return original_create_aot_dispatcher_function(flat_fn, fake_flat_args, aot_config, fake_mode, shape_env)
-    torch._functorch.aot_autograd.create_aot_dispatcher_function = wrapper_create_aot_dispatcher_function
-
 
 def register_custom_ops():
 

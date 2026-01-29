@@ -5,6 +5,9 @@
 
 from typing import Dict, List, Callable
 import time
+import io
+import sys
+import os
 
 import torch
 import torch._inductor.scheduler
@@ -24,9 +27,9 @@ from .profilers.graph_profile import MemoryProfilingInterpreter
 from .patch_compiled_func import patch_compiled_func, unpatch_compiled_func, get_backward_inputs
 from .util import get_input_nodes, get_activation_node_names, get_index_by_graph_id, get_deepcompile_handle, log_rank0
 from .partitioner import get_wrapped_partitioner
-from .inductor import register_custom_ops, patch_create_aot_dispatcher_function, patch_create_aot_dispatcher_function_ulysses
-from .util import get_param_nodes
-from .patch_aot_module import wrapper
+from .inductor import register_custom_ops, patch_create_aot_dispatcher_function
+from .util import log_graph_0
+from .autosp import apply_autosp
 
 remaining_schedule = None
 next_pass_step = -1
@@ -41,7 +44,6 @@ opt_pass_times = []
 opt_passes = {}
 
 remaining_bwd_compile_count = 0
-
 
 def register_compile_pass(name: str, opt_pass_fn):
     assert name not in opt_passes, f"Opt pass {name} already registered"
@@ -73,7 +75,6 @@ def launch_compile_passes(global_steps: int):
         graph_order.clear()
         profiling_results.clear()
         param_manager.clear()
-        wrapper()
 
 def set_time_and_tensor_size(graph_id, graph: Graph, mem, bwd, profiling_results):
     node_time = []
@@ -265,10 +266,11 @@ def make_backend(backend, compile_kwargs={}, free_activation=False, debug_log=Fa
 
 def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=False):
     def backend_fn(gm: GraphModule, real_inputs):
-        if backend == "eager":
-            aot_mod = aot_module_simplified(gm, real_inputs)
-            return torch._dynamo.optimize(**compile_kwargs)(aot_mod)
-        elif backend == "inductor":
-            patch_create_aot_dispatcher_function_ulysses()
-            return torch._inductor.compile(gm, real_inputs)
+        if debug_log:
+            log_graph_0(gm, filename="before")
+        apply_autosp(gm)
+        if debug_log:
+            log_graph_0(gm, filename="after")
+        
+        return torch._inductor.compile(gm, real_inputs)
     return backend_fn

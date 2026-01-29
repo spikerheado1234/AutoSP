@@ -6,3 +6,5 @@ slurm_jobs
 slurm*
 experiments
 logs
+*.
+*.pt

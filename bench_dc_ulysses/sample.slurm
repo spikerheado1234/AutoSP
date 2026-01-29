@@ -17,7 +17,7 @@
 #SBATCH --output=slurm_out/out_%j.log
 
 source ~/.bashrc
-conda activate /u/ndani/deepcompile
+conda activate /u/ndani/benchmarking
 
 # # NCCL configuration
 export NCCL_INCLUDE_DIR=/opt/nvidia/hpc_sdk/Linux_x86_64/25.3/comm_libs/12.8/nccl-2.25/include
