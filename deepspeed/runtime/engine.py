@@ -2040,8 +2040,7 @@ class DeepSpeedEngine(Module):
         if self.scale_wrt_gas is not None:
             scale_wrt_gas = self.scale_wrt_gas
 
-        do_gradient_reduction = self.enable_backward_allreduce and not self.inside_no_sync_ctxt and not self.is_deepcompile_enabled(
-        )
+        do_gradient_reduction = self.enable_backward_allreduce and not self.inside_no_sync_ctxt and not self.is_deepcompile_enabled()
 
         # scale loss w.r.t. gradient accumulation if reduction is not disabled
         if do_gradient_reduction and self.gradient_accumulation_steps() > 1 and scale_wrt_gas:
@@ -2096,9 +2095,9 @@ class DeepSpeedEngine(Module):
 
         self._start_timers(self.engine_timers.backward_reduce_timers)
 
-        if do_gradient_reduction:
-            # Traditional code path that allreduces the module parameter grads
-            self.allreduce_gradients()
+        # if do_gradient_reduction:
+        #     # Traditional code path that allreduces the module parameter grads
+        self.allreduce_gradients()
 
         self._stop_timers(self.engine_timers.backward_reduce_timers)
 

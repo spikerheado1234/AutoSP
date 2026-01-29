@@ -88,7 +88,7 @@ def sdpa_wrapper(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=Tru
         dropout_p=dropout_p,
         is_causal=is_causal,
         scale=scale,
-        enable_gqa=True
+        enable_gqa=False
     )
     
     # Debug: save SDPA output (before output all-to-all) in [B, N, S, H] format

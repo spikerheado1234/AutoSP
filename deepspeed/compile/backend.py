@@ -269,10 +269,9 @@ def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debu
     def backend_fn(gm: GraphModule, real_inputs):
         if debug_log:
             log_graph_0(gm, filename="before")
-        autosp_gm = apply_autosp(gm)
+        apply_autosp(gm)
         if debug_log:
-            log_graph_0(autosp_gm, filename="after")
+            log_graph_0(gm, filename="after")
         
-        # patch_create_aot_dispatcher_function_ulysses()
-        return torch._inductor.compile(autosp_gm, real_inputs)
+        return torch._inductor.compile(gm, real_inputs)
     return backend_fn
