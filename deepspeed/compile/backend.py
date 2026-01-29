@@ -265,7 +265,7 @@ def make_backend(backend, compile_kwargs={}, free_activation=False, debug_log=Fa
     return backend_fn
 
 
-def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=True):
+def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=False):
     def backend_fn(gm: GraphModule, real_inputs):
         if debug_log:
             log_graph_0(gm, filename="before")

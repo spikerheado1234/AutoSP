@@ -16,15 +16,6 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torch.fx import GraphModule, Node
 
-# Debug flag - set to True to dump tensors
-DEBUG_DUMP_TENSORS = os.environ.get("AUTOSP_DEBUG", "0") == "1"
-DEBUG_DUMP_DIR = os.environ.get("AUTOSP_DEBUG_DIR", "autosp_debug")
-
-
-# ============================================================================
-# Custom Op: Unified all-to-all with scatter/gather indices
-# ============================================================================
-
 @torch.library.custom_op("autosp::all_to_all", mutates_args=())
 def all_to_all(
     input: torch.Tensor,
@@ -41,11 +32,6 @@ def all_to_all(
     For O (scatter_idx=2, gather_idx=1):
         [B, N/P, S, H] -> [B, N, S/P, H]
     """
-    if DEBUG_DUMP_TENSORS:
-        rank = dist.get_rank()
-        os.makedirs(DEBUG_DUMP_DIR, exist_ok=True)
-        torch.save(input, f"{DEBUG_DUMP_DIR}/{name}_input_rank{rank}.pt")
-    
     B, dim1, dim2, H = input.shape
     
     if scatter_idx == 1:  # QKV: scatter heads, gather sequence
@@ -82,9 +68,6 @@ def all_to_all(
         # Merge P into N: [B, N, S/P, H]
         output = output.reshape(B, world_size * local_N, S // world_size, H)
     
-    if DEBUG_DUMP_TENSORS:
-        torch.save(output, f"{DEBUG_DUMP_DIR}/{name}_output_rank{rank}.pt")
-    
     return output
 
 
@@ -113,15 +96,10 @@ def all_to_all_backward(ctx, grad):
         None, None, None, None,
     )
 
-
 torch.library.register_autograd(
     "autosp::all_to_all", all_to_all_backward, setup_context=all_to_all_backward_setup
 )
 
-
-# ============================================================================
-# Graph Transformation
-# ============================================================================
 
 def insert_all_to_all(gm: GraphModule, node: Node, scatter_idx: int, gather_idx: int, name: str) -> Node:
     """Insert an all-to-all node after the given node."""
