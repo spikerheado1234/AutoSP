@@ -27,9 +27,8 @@ from .profilers.graph_profile import MemoryProfilingInterpreter
 from .patch_compiled_func import patch_compiled_func, unpatch_compiled_func, get_backward_inputs
 from .util import get_input_nodes, get_activation_node_names, get_index_by_graph_id, get_deepcompile_handle, log_rank0
 from .partitioner import get_wrapped_partitioner
-from .inductor import register_custom_ops, patch_create_aot_dispatcher_function, patch_create_aot_dispatcher_function_ulysses
+from .inductor import register_custom_ops, patch_create_aot_dispatcher_function
 from .util import log_graph_0
-from .patch_aot_module import wrapper
 from .autosp import apply_autosp
 
 remaining_schedule = None
