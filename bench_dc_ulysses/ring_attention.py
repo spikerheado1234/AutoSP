@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import inspect
 from functools import cache
 
+from sp_dp_registry import get_group, is_setup, sp_size
 from flash_attn.flash_attn_interface import _flash_attn_forward, _flash_attn_backward
 
 __all__ = ["update_out_and_lse", "RingComm", "get_default_args"]
@@ -499,6 +500,11 @@ def ring_attention_forward(
         tuple: (attn_output, None) where attn_output is (batch, seq, heads, dim)
     """
     # Convert from HF format (batch, heads, seq, dim) to flash_attn format (batch, seq, heads, dim)
+    assert is_setup(), 'Incorrectly setup SP/DP Groups.'
+
+    gid = dist.get_rank() // sp_size()
+    group = get_group(gid)
+
     q = query_states.transpose(1, 2).contiguous()
     k = key_states.transpose(1, 2).contiguous()
     v = value_states.transpose(1, 2).contiguous()
@@ -516,7 +522,7 @@ def ring_attention_forward(
         alibi_slopes=None,
         deterministic=False,
         return_attn_probs=False,
-        group=dist.group.WORLD,
+        group=group,
     )
     
     # Output is already in (batch, seq, heads, dim) format, which HF expects after attention

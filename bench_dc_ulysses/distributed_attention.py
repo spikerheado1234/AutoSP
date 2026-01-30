@@ -2,6 +2,7 @@ import os
 import torch
 import torch.distributed as dist
 from deepspeed.sequence.layer import DistributedAttention
+from sp_dp_registry import get_group, is_setup, sp_size
 
 def ulysses_attention_forward(
     self,
@@ -14,6 +15,11 @@ def ulysses_attention_forward(
     is_causal=True,
     **kwargs,
 ):
+    assert is_setup(), 'Incorrectly setup SP/DP Groups.'
+
+    gid = dist.get_rank() // sp_size()
+    group = get_group(gid)
+
     # Ulysses expects (batch, seq, heads, dim)
     # HF standard provides (batch, heads, seq, dim)
     q = query_states.transpose(1, 2).contiguous()
@@ -23,7 +29,8 @@ def ulysses_attention_forward(
     if not hasattr(self, "ulysses_engine"):
         self.ulysses_engine = DistributedAttention(
             sdpa_wrapper,
-            dist.group.WORLD,
+            #dist.group.WORLD,
+            group,
             scatter_idx=2, # Shard heads
             gather_idx=1   # Gather sequences
         )

@@ -23,11 +23,10 @@ import time
 import os
 
 from distributed_attention import ulysses_attention_forward
-# from ring_attention import ring_attention_forward
-# from sp_dp_registry import get_group, register_groups
+from ring_attention import ring_attention_forward
+from sp_dp_registry import get_group, populate_registry, get_registry
 
 torch.set_float32_matmul_precision("high")
-
 ## This dictionary is globally should be globally visible everywhere. ##
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -87,6 +86,13 @@ def main():
     is_deepspeed = accelerator.state.deepspeed_plugin is not None
     assert accelerator.num_processes == args.sp_size * args.dp_size, 'Incorrect dp/sp sizing'
 
+    ## Set sp/dp groups accordingly. ##
+    if args.compile in ['compile', 'eager', 'ringattn']:
+        populate_registry(args.sp_size, args.dp_size)
+
+    if accelerator.is_main_process:
+        print(f'GROUP_REGISTRY: {get_registry()}')
+
     # Load model and tokenizer
     if accelerator.is_main_process:
         print("Loading model and tokenizer...")
@@ -106,7 +112,8 @@ def main():
 
     if args.num_layers is not None:
         model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-        print(f"num_hidden_layers: {model_config.num_hidden_layers} -> {args.num_layers}")
+        if accelerator.is_main_process:
+            print(f"num_hidden_layers: {model_config.num_hidden_layers} -> {args.num_layers}")
         model_config.num_hidden_layers = args.num_layers
         model_config._attn_implementation = attention_backend
         model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
@@ -117,21 +124,6 @@ def main():
 
     if args.activation_checkpointing:
         model.gradient_checkpointing_enable()
-
-    ## Instantiate process groups for SP+DP interoperation. ##
-    os.environ['SP_SIZE'] = str(args.sp_size)
-    os.environ['DP_SIZE'] = str(args.dp_size)
-    
-    if args.compile in ["eager", "compile", "ringattn"]:
-        ## We register in the run_acc_lm.py file for baselines to reduce code-duplication.
-        ## Else the registration happens within the SP compiler pass within deepspeed.
-        group_listing = []
-        offset = 0
-        for _ in range(args.dp_size):
-            group_listing.append([i + offset for i in range(args.sp_size)])
-            offset += args.sp_size
-
-        # register_groups(group_listing)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
@@ -201,7 +193,7 @@ def main():
     loss_log_file = open(f"logs/loss_{args.compile}_{args.seq_length}_{accelerator.process_index}.csv", "w")
     loss_log_file.write("step,loss\n")
 
-    sp_rank = dist.get_rank()
+    sp_rank = dist.get_rank() % args.sp_size
     for epoch in range(args.num_epochs):
         start_iter = time.time()
 
@@ -251,4 +243,5 @@ if __name__ == "__main__":
     torch._dynamo.config.cache_size_limit = 128
     torch._dynamo.config.optimize_ddp = False
     main()
+
     
