@@ -264,13 +264,8 @@ def make_backend(backend, compile_kwargs={}, free_activation=False, debug_log=Fa
     return backend_fn
 
 
-def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=False):
+def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=True):
     def backend_fn(gm: GraphModule, real_inputs):
-        if debug_log:
-            log_graph_0(gm, filename="before")
-        apply_autosp(gm)
-        if debug_log:
-            log_graph_0(gm, filename="after")
-        
+        apply_autosp(gm, real_inputs, debug_log)    
         return torch._inductor.compile(gm, real_inputs)
     return backend_fn

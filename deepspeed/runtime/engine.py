@@ -3763,7 +3763,7 @@ class DeepSpeedEngine(Module):
                 backend = init_ulysses(self, backend, compile_config, compile_kwargs, schedule)
 
         # create new dict to avoid modifying original dict
-        self.module.compile(**{**compile_kwargs, 'backend': backend})
+        self.module.compile(**{**compile_kwargs, 'backend': backend, 'dynamic': True})
 
         self._is_compiled = True
 

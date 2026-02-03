@@ -49,7 +49,7 @@ def get_args():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--seq_length", type=int, default=512)
-    parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--activation_checkpointing", action="store_true")
@@ -207,33 +207,28 @@ def main():
 
         for step, batch in enumerate(data_loader):
             input_ids = batch['input_ids'].to(device)             # [B, S]
-            attention_mask = batch['attention_mask'].to(device)   # [B, S]
-
+            torch._dynamo.decorators.mark_dynamic(input_ids, 1)
+            label_ids = input_ids.clone()    # [B, S]
+            torch._dynamo.decorators.mark_dynamic(label_ids, 1)
+            attention_mask = batch['attention_mask'].to(device)
             B, S = input_ids.shape
-            chunk_size = S // args.sp_size 
-            start = sp_rank * chunk_size
-            end = (sp_rank + 1) * chunk_size
-            input_ids_shard = input_ids[:, start:end]               # [B, S_shard]
-            labels_shard = input_ids_shard.clone()
+
+            if args.compile != 'deepcompile':
+                chunk_size = S // args.sp_size 
+                start = sp_rank * chunk_size
+                end = start + chunk_size
+                input_ids = input_ids[:, start:end]               # [B, S_shard]
+                label_ids = label_ids[:, start:end]               # [B, S_shard] - must match input_ids
+                attention_mask = attention_mask[:, start:end]
 
             #TODO: fix position ids
-            position_ids = torch.arange(S, device=device).unsqueeze(0)
-            position_ids_shard = torch.arange(start, end, device=device).unsqueeze(0)
-
-            if args.compile in ["compile", "eager", "ringattn"]:
-                #input_ids_ = input_ids
-                input_ids_ = input_ids_shard 
-                attention_mask_ = attention_mask
-                labels_ = labels_shard
-            else:
-                input_ids_ = input_ids_shard
-                attention_mask_ = attention_mask
-                labels_ = labels_shard
+            # position_ids = torch.arange(S, device=device).unsqueeze(0)
+            # position_ids_shard = torch.arange(start, end, device=device).unsqueeze(0)
 
             start = accelerator.process_index * args.seq_length // accelerator.num_processes
             end = start + args.seq_length // accelerator.num_processes
 
-            outputs = model(input_ids=input_ids_, labels=labels_, attention_mask=None)
+            outputs = model(input_ids=input_ids, labels=label_ids, attention_mask=None)
             loss = outputs.loss
             loss_log_file.write(f"{global_step},{loss.item()}\n")
             loss_log_file.flush()
