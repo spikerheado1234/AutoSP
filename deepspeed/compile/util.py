@@ -429,6 +429,7 @@ def get_index_by_graph_id(graph_order, target_graph_id):
 
 INPUT_ID_KEY = "input_id"
 LABEL_ID_KEY = "label_id"
+POSITION_ID_KEY = "position_id"
 
 
 def create_shard_offsets(
@@ -477,6 +478,10 @@ def get_label_id_node(gm: GraphModule) -> Node:
     node = find_node_by_tag(gm, LABEL_ID_KEY)
     if node is None:
         raise RuntimeError("Failed to find input sequence. Please make sure to annotate the input sequence with @input_id")
+    return node
+
+def get_position_id_node(gm: GraphModule) -> Node:
+    node = find_node_by_tag(gm, POSITION_ID_KEY)
     return node
 
 @dataclass
