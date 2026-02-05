@@ -18,7 +18,6 @@ import torch.distributed as dist
 import torch
 import random
 import numpy as np
-import csv
 import time
 import os
 
@@ -27,7 +26,7 @@ from ring_attention import ring_attention_forward
 from sp_dp_registry import get_group, populate_registry, get_registry
 
 torch.set_float32_matmul_precision("high")
-## This dictionary is globally should be globally visible everywhere. ##
+
 def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
@@ -43,12 +42,14 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-def prepare_autosp_inputs(input_id : torch.Tensor, label_id : torch.Tensor, seq_dim: int):
+def prepare_autosp_inputs(input_id: torch.Tensor, label_id: torch.Tensor, position_id: torch.Tensor, seq_dim: int):
     torch._dynamo.decorators.mark_dynamic(input_id, seq_dim)
     torch._dynamo.decorators.mark_dynamic(label_id, seq_dim)
+    torch._dynamo.decorators.mark_dynamic(position_id, seq_dim)
     input_id.tag = "input_id"
     label_id.tag = "label_id"
-    return input_id, label_id
+    position_id.tag = "position_id"
+    return input_id, label_id, position_id
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -169,7 +170,7 @@ def main():
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True
         model.compile(backend=args.backend)
-    elif args.compile == "compile" or args.compile == "ringattn":
+    elif args.compile in ["compile", "ringattn"]:
         print(f"Running torch.compile with backend={args.backend}")
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
         torch._dynamo.config.capture_scalar_outputs = True
@@ -206,37 +207,34 @@ def main():
         start_iter = time.time()
 
         for step, batch in enumerate(data_loader):
-            input_ids = batch['input_ids'].to(device)             # [B, S]
-            label_ids = input_ids.clone()    # [B, S]
-            attention_mask = batch['attention_mask'].to(device)
+            input_ids = batch['input_ids'].to(device) # [B, S]
             B, S = input_ids.shape
+
+            label_ids = input_ids.clone() # [B, S]
+            position_ids = torch.arange(S, device=device).unsqueeze(0)
+
+            attention_mask = batch['attention_mask'].to(device)
             if args.compile == 'deepcompile':
-                input_ids, label_ids = prepare_autosp_inputs(input_ids, label_ids, seq_dim=1)
+                input_ids, label_ids, position_ids = prepare_autosp_inputs(input_ids, label_ids, position_ids, seq_dim=1)
             else:
                 chunk_size = S // args.sp_size 
                 start = sp_rank * chunk_size
                 end = start + chunk_size
                 input_ids = input_ids[:, start:end]               # [B, S_shard]
                 label_ids = label_ids[:, start:end]               # [B, S_shard] - must match input_ids
+                position_ids = position_ids[:, start:end]
                 attention_mask = attention_mask[:, start:end]
-        
-            #TODO: fix position ids
-            # position_ids = torch.arange(S, device=device).unsqueeze(0)
-            # position_ids_shard = torch.arange(start, end, device=device).unsqueeze(0)
 
-            start = accelerator.process_index * args.seq_length // accelerator.num_processes
-            end = start + args.seq_length // accelerator.num_processes
-
-            outputs = model(input_ids=input_ids, labels=label_ids, attention_mask=None)
+            outputs = model(input_ids=input_ids, labels=label_ids, position_ids=position_ids, attention_mask=None)
             loss = outputs.loss
+            print(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}")
+
+            accelerator.backward(loss)
+
             loss_log_file.write(f"{global_step},{loss.item()}\n")
             loss_log_file.flush()
 
-            print(f"Epoch {epoch+1}, Step {global_step}, Loss: {loss.item()} time: {time.time() - start_iter} alloc_mem: {torch.cuda.memory_allocated() / (1024 ** 3)} peak_mem: {torch.cuda.max_memory_allocated() / (1024 ** 3)}")
-            accelerator.backward(loss)
-
             global_step += 1
-
             if global_step > args.steps:
                 break
 

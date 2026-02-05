@@ -22,7 +22,7 @@ from torch._functorch.compile_utils import fx_graph_cse
 
 from ..custom_ops import all_to_all
 from ..fx import find_node_by_name, get_node_shape_meta, replace_node_users
-from ..util import get_input_id_node, get_label_id_node, shard_tensor_node, get_sdpa_nodes, ShardingConfig
+from ..util import get_input_id_node, get_label_id_node, get_position_id_node, shard_tensor_node, get_sdpa_nodes, ShardingConfig
 
 def pass_shard_seq_dim(gm: GraphModule, example_inputs):
     """
@@ -64,6 +64,15 @@ def pass_shard_label_ids(gm: GraphModule, example_inputs):
     config = ShardingConfig.from_distributed()
     label_ids_node = get_label_id_node(gm)
     shard_tensor_node(gm, label_ids_node, config)
+
+def pass_shard_position_ids(gm: GraphModule, example_inputs):
+    """Shard label_ids tensor across ranks."""
+    config = ShardingConfig.from_distributed()
+    position_ids_node = get_position_id_node(gm)
+    if position_ids_node is None:
+        print("[WARNING] position id node not found. Skipping sharding of position ids.")
+        return
+    shard_tensor_node(gm, position_ids_node, config)
 
 
 def pass_insert_attention_all_to_all(gm: GraphModule, real_inputs):
@@ -130,6 +139,7 @@ def apply_autosp(
         pass_shard_seq_dim,
         pass_shard_input_ids,
         pass_shard_label_ids,
+        pass_shard_position_ids,
         pass_insert_attention_all_to_all,
         pass_propagate_shapes,
         pass_canonicalize,
