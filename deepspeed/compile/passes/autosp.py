@@ -66,7 +66,7 @@ def pass_shard_label_ids(gm: GraphModule, example_inputs):
     shard_tensor_node(gm, label_ids_node, config)
 
 def pass_shard_position_ids(gm: GraphModule, example_inputs):
-    """Shard label_ids tensor across ranks."""
+    """Shard position_ids tensor across ranks."""
     config = ShardingConfig.from_distributed()
     position_ids_node = get_position_id_node(gm)
     if position_ids_node is None:
