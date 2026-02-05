@@ -20,7 +20,7 @@ from torch.fx import GraphModule, Node
 from torch.fx.passes.fake_tensor_prop import FakeTensorProp
 from torch._functorch.compile_utils import fx_graph_cse
 
-from .custom_ops import all_to_all
+from ..custom_ops import all_to_all
 from ..fx import find_node_by_name, get_node_shape_meta, replace_node_users
 from ..util import get_input_id_node, get_label_id_node, shard_tensor_node, get_sdpa_nodes, ShardingConfig
 

@@ -216,18 +216,18 @@ def main():
         for step, batch in enumerate(data_loader):
             input_ids = batch['input_ids'].to(device)             # [B, S]
             label_ids = input_ids.clone()    # [B, S]
-            input_ids, label_ids = prepare_autosp_inputs(input_ids, label_ids, seq_dim=1)
             attention_mask = batch['attention_mask'].to(device)
             B, S = input_ids.shape
-
-            if args.compile != 'deepcompile':
+            if args.compile == 'deepcompile':
+                input_ids, label_ids = prepare_autosp_inputs(input_ids, label_ids, seq_dim=1)
+            else:
                 chunk_size = S // args.sp_size 
                 start = sp_rank * chunk_size
                 end = start + chunk_size
                 input_ids = input_ids[:, start:end]               # [B, S_shard]
                 label_ids = label_ids[:, start:end]               # [B, S_shard] - must match input_ids
                 attention_mask = attention_mask[:, start:end]
-
+        
             #TODO: fix position ids
             # position_ids = torch.arange(S, device=device).unsqueeze(0)
             # position_ids_shard = torch.arange(start, end, device=device).unsqueeze(0)
