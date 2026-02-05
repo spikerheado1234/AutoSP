@@ -3,13 +3,11 @@
 
 # DeepSpeed Team
 
-from typing import Callable, Any, List
+from typing import Callable, Any, List, Optional
 from collections import defaultdict
 
 import torch
-from torch.fx import Node, Graph
-
-from .util import get_last_uses
+from torch.fx import Node, Graph, GraphModule
 
 
 def get_output_node(graph: Graph):
@@ -56,49 +54,6 @@ def add_args_process(graph: Graph,
 
     return new_nodes
 
-def add_qkv_alltoall(graph: Graph,
-                    node: Node,
-                    fn: Callable[..., Any],
-                    extra_args: List[int] = [],
-                    name=None,
-                    meta={}) -> List[Node]:
-    new_nodes = []
-    with graph.inserting_before(node):
-        target_args = [arg for arg in node.args if isinstance(arg, Node) and arg.name != 'expand_6']
-
-        for arg in target_args:
-            new_node = graph.create_node('call_function', fn, (arg, 1,), name=name)
-            for k, v in meta.items():
-                new_node.meta[k] = v
-            node.replace_input_with(arg, new_node)
-            new_nodes.append(new_node)
-    
-    return new_nodes
-
-def add_attn_out_alltoall(graph: Graph,
-                    node: Node,
-                    fn: Callable[..., Any],
-                    extra_args: List[int] = [],
-                    name=None,
-                    meta={}) -> Node:
-    
-    with graph.inserting_after(node):
-        args = (node, 2,)
-
-        node_users = node.users.keys()
-        new_node = graph.create_node('call_function', fn, args, {}, name=name)
-        users = {}
-        for u in node_users:
-            if u != new_node:
-                users[u] = (node, new_node)
-        for u, (old_in, new_in) in users.items():
-            u.replace_input_with(old_in, new_in)
-
-    # for k, v in meta.items():
-    #     new_node.meta[k] = v
-
-    return new_node
-
 def replace_node(graph: Graph, node: Node):
     for old_node in node._input_nodes:
         new_node = graph.create_node(op="call_function", target=torch.ops.mylib.boop.default, args=(old_node,))
@@ -143,6 +98,7 @@ def _make_node_meta(node: Node, ds_id: int, comm: bool):
 
 
 def add_free_activations(graph_id: int, graph: Graph, activation_node_names: List[str]):
+    from .util import get_last_uses
     node_to_last_use, _ = get_last_uses(graph)
     activation_nodes_set = set([n for n in graph.nodes if n.op == "placeholder" and n.name in activation_node_names])
 
@@ -188,3 +144,35 @@ def add_free_activations(graph_id: int, graph: Graph, activation_node_names: Lis
 
             # Python version for debugging
             # graph.create_node('call_function', free_tensors, args, {}, name=node_name)
+
+
+def find_node_by_name(gm: GraphModule, name: str) -> Optional[Node]:
+    """Find a node by exact name match."""
+    for node in gm.graph.nodes:
+        if node.name == name:
+            return node
+    return None
+
+
+def find_node_by_tag(gm: GraphModule, tag: str) -> Optional[Node]:
+    """Find a node by exact tag match."""
+    input_id_node = None
+    for node in gm.graph.nodes:
+        tensor_dict = node.meta.get('tensor_dict')
+        if tensor_dict and tensor_dict.get('tag') == tag:
+            input_id_node = node
+            break
+    return input_id_node
+
+
+def get_node_shape_meta(node: Node) -> Optional[torch.Tensor]:
+    """Get shape metadata from a node."""
+    return node.meta.get("val") or node.meta.get("example_value")
+
+
+def replace_node_users(node: Node, replacement: Node, exclude: Optional[List[Node]] = None):
+    """Replace all uses of a node with a replacement, excluding specified nodes."""
+    exclude = exclude or []
+    to_replace = [u for u in node.users if u not in exclude]
+    for user in to_replace:
+        user.replace_input_with(node, replacement)

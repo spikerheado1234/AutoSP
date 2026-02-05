@@ -29,7 +29,7 @@ from .util import get_input_nodes, get_activation_node_names, get_index_by_graph
 from .partitioner import get_wrapped_partitioner
 from .inductor import register_custom_ops, patch_create_aot_dispatcher_function
 from .util import log_graph_0
-from .autosp import apply_autosp
+from .passes.autosp import apply_autosp
 
 remaining_schedule = None
 next_pass_step = -1
@@ -264,7 +264,7 @@ def make_backend(backend, compile_kwargs={}, free_activation=False, debug_log=Fa
     return backend_fn
 
 
-def make_ulysses_backend(backend, compile_kwargs={}, free_activation=False, debug_log=True):
+def make_autosp_backend(backend, compile_kwargs={}, free_activation=False, debug_log=False):
     def backend_fn(gm: GraphModule, real_inputs):
         apply_autosp(gm, real_inputs, debug_log)    
         return torch._inductor.compile(gm, real_inputs)

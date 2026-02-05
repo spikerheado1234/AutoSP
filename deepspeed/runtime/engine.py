@@ -112,7 +112,7 @@ from deepspeed.compile.backend import register_compile_pass, opt_passes
 from deepspeed.compile.passes import zero3_compile, prefetch, selective_gather
 from deepspeed.compile.init_z1 import init_z1
 from deepspeed.compile.init_z3 import init_z3
-from deepspeed.compile.init_ulysses import init_ulysses
+from deepspeed.compile.init_sp import init_ulysses
 
 MEMORY_OPT_ALLREDUCE_SIZE = 500000000
 

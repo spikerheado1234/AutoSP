@@ -43,6 +43,14 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+
+def prepare_autosp_inputs(input_id : torch.Tensor, label_id : torch.Tensor, seq_dim: int):
+    torch._dynamo.decorators.mark_dynamic(input_id, seq_dim)
+    torch._dynamo.decorators.mark_dynamic(label_id, seq_dim)
+    input_id.tag = "input_id"
+    label_id.tag = "label_id"
+    return input_id, label_id
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
@@ -207,9 +215,8 @@ def main():
 
         for step, batch in enumerate(data_loader):
             input_ids = batch['input_ids'].to(device)             # [B, S]
-            torch._dynamo.decorators.mark_dynamic(input_ids, 1)
             label_ids = input_ids.clone()    # [B, S]
-            torch._dynamo.decorators.mark_dynamic(label_ids, 1)
+            input_ids, label_ids = prepare_autosp_inputs(input_ids, label_ids, seq_dim=1)
             attention_mask = batch['attention_mask'].to(device)
             B, S = input_ids.shape
 
