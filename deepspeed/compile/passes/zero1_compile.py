@@ -9,7 +9,7 @@ import torch
 from torch.fx import GraphModule
 
 from ..util import get_deepcompile_handle
-from ..fx import add_postprocess, add_attn_out_alltoall, add_qkv_alltoall, move_primals_to_head, _make_node_meta
+from ..fx import add_postprocess, move_primals_to_head, _make_node_meta
 
 NAME = "zero1_compile"
 
